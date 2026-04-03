@@ -1,0 +1,11 @@
+[package]
+name = "mdbook_rust_analyzer_highlight"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mdbook = "0.4.52"
+serde_json = "1"
+regex = "1"
+ra_ap_ide = "0.0.326"
+ra_ap_ide_db = "0.0.326"

@@ -1,0 +1,12 @@
+[book]
+authors = ["sagi21805"]
+language = "en"
+src = "src"
+title = "test-book"
+
+[preprocessor.mdbook-rust-analyzer-highlight]
+command = "cargo run --manifest-path ../Cargo.toml"
+
+
+[output.html]
+additional-css = ["theme/hlrs.css"]

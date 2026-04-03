@@ -1,0 +1,46 @@
+.hlrs-function {
+    color: #61afef;
+}
+
+.hlrs-litstr,
+.hlrs-string {
+    color: #98c379;
+}
+
+.hlrs-selftoken,
+.hlrs-keyword {
+    color: #c678dd;
+}
+
+.hlrs-macro,
+.hlrs-litnum {
+    color: #d19a66;
+}
+
+.hlrs-segment,
+.hlrs-returnType,
+.hlrs-fntype,
+.hlrs-type {
+    color: #e5c07b;
+}
+
+.hlrs-variable {
+    color: #e06c75;
+}
+
+.hlrs-comment {
+    color: #5c6370;
+    font-style: italic;
+}
+
+.hlrs-lifetime {
+    color: #a9cee7;
+}
+
+.hlrs-enum {
+    color: #56b6c2;
+}
+
+.hlrs-attribute {
+    color: #abb2bf;
+}
