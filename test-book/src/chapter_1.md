@@ -28,7 +28,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// ── Preprocessor ─────────────────────────────────────────────────────────────
 
 struct RaHighlight;
 
@@ -51,7 +50,6 @@ impl Preprocessor for RaHighlight {
     }
 }
 
-// ── Replace ```rust fences with highlighted HTML ──────────────────────────────
 
 fn process_markdown(content: &str) -> String {
     let re = Regex::new(r"(?ms)^```rust[^\n]*\n(.*?)^```[ \t]*$").unwrap();
@@ -64,7 +62,6 @@ fn process_markdown(content: &str) -> String {
     .into_owned()
 }
 
-// ── Hand the code to RA, get semantic ranges back ─────────────────────────────
 
 fn highlight_to_html(code: &str) -> String {
     let (analysis, file_id) = Analysis::from_single_file(code.to_string());
@@ -87,7 +84,6 @@ fn highlight_to_html(code: &str) -> String {
     ranges_to_html(code, &highlights)
 }
 
-// ── Splice <span> tags at RA's byte ranges ────────────────────────────────────
 
 fn ranges_to_html(code: &str, highlights: &[HlRange]) -> String {
     let mut out = String::with_capacity(code.len() * 2);
@@ -126,7 +122,6 @@ fn ranges_to_html(code: &str, highlights: &[HlRange]) -> String {
     out
 }
 
-// ── RA semantic tag → CSS class ───────────────────────────────────────────────
 
 fn hl_to_class(hl: Highlight) -> &'static str {
     match hl.tag {
@@ -193,6 +188,66 @@ fn html_escape(s: &str) -> String {
 pub enum Test {
     A,
     B
+}
+
+```
+ANOTHER SNIPPET 
+
+
+```rust
+fn highlight_to_html(code: &str) -> String {
+    let (analysis, file_id) = Analysis::from_single_file(code.to_string());
+
+    let config = HighlightConfig {
+        strings: true,
+        punctuation: true,
+        specialize_punctuation: true,
+        operator: true,
+        specialize_operator: true,
+        inject_doc_comment: true,
+        macro_bang: true,
+        syntactic_name_ref_highlighting: true,
+        comments: true,
+        minicore: Default::default(),
+    };
+
+    let highlights = analysis.highlight(config, file_id).unwrap_or_default();
+
+    ranges_to_html(code, &highlights)
+}
+
+```
+
+```rust
+static GLOBAL_DESCRIPTOR_TABLE_LONG_MODE: GlobalDescriptorTableLong =
+    GlobalDescriptorTableLong::default();
+
+use std::arch::asm;
+
+#[unsafe(no_mangle)]
+#[unsafe(link_section = ".start")]
+#[allow(unsafe_op_in_unsafe_fn)]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn second_stage() -> ! {
+    // Set data segment register
+    asm!("mov eax, 0x10", "mov ds, eax",);
+    // Enable paging and load page tables with an identity
+    // mapping
+    #[cfg(target_arch = "x86")]
+    cpu_utils::structures::paging::enable();
+    // Load the global descriptor table for long mode
+    GLOBAL_DESCRIPTOR_TABLE_LONG_MODE.load();
+    // Update global descriptor table to enable long mode
+    // and jump to kernel code
+    asm!(
+        "ljmp ${section}, ${next_stage}",
+        section = const Sections::KernelCode as u8,
+        next_stage = const KERNEL_OFFSET,
+        options(att_syntax)
+    );
+
+    #[allow(clippy::all)]
+    loop {}
 }
 
 ```

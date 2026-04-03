@@ -5,8 +5,8 @@ src = "src"
 title = "test-book"
 
 [preprocessor.mdbook-rust-analyzer-highlight]
-command = "cargo run --manifest-path ../Cargo.toml"
-
+command = "cargo run --manifest-path ../Cargo.toml --release"
+project-root = "../"
 
 [output.html]
 additional-css = ["theme/hlrs.css"]
