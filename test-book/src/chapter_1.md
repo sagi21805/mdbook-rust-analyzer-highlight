@@ -1,11 +1,170 @@
-# Chapter 1
 ```rust
 use mdbook::book::{Book, BookItem};
 use mdbook::errors::Error;
 use mdbook::preprocess::{CmdPreprocessor, Preprocessor, PreprocessorContext};
-use ra_ap_ide::{Analysis, Highlight, HighlightConfig, HlRange, HlTag, SymbolKind};
+use ra_ap_ide::{
+    AdjustmentHints, Analysis, AnalysisHost, GenericParameterHints, Highlight, HighlightConfig,
+    HlRange, HlTag, InlayFieldsToResolve, InlayHint, InlayHintsConfig, InlayKind, SymbolKind,
+    TextRange,
+};
+use ra_ap_ide_db::{ChangeWithProcMacros, MiniCore};
+use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
+use ra_ap_project_model::CargoConfig;
+use ra_ap_vfs::{AbsPathBuf, Change, FileId, Vfs, VfsPath};
 use regex::Regex;
 use std::io;
+use std::os::windows::fs::FileTypeExt;
+use std::path::Path;
+
+impl Preprocessor for RaHighlight {
+    fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book, Error> {
+        let project_root = ctx
+            .config
+            .get_preprocessor(self.name())
+            .and_then(|t| t.get("project-root"))
+            .and_then(|v| v.as_str())
+            .unwrap();
+
+        let mut highlighter: Box<WorkspaceHighlighter> =
+            Box::new(WorkspaceHighlighter::load(project_root));
+
+        book.for_each_mut(|item| {
+            if let BookItem::Chapter(ch) = item {
+                ch.content = highlighter.as_mut().process_markdown(&ch.content);
+            }
+        });
+
+        Ok(book)
+    }
+}
+
+
+pub struct WorkspaceHighlighter {
+    host: AnalysisHost,
+    snippet_file_id: FileId,
+}
+
+impl WorkspaceHighlighter {
+    /// Load the Cargo workspace at `project_root`
+    pub fn load(project_root: &str) -> Self {
+        let root = Path::new(project_root);
+        let sentinel = Path::new(project_root).join("src/_snippet.rs");
+        std::fs::write(&sentinel, "// placeholder").unwrap();
+        let cargo_toml = root.join("Cargo.toml");
+
+        let load_cfg = LoadCargoConfig {
+            load_out_dirs_from_check: true,
+            with_proc_macro_server: ProcMacroServerChoice::Sysroot,
+            prefill_caches: false,
+            num_worker_threads: 4,
+            proc_macro_processes: 4,
+        };
+
+        let (db, vfs, _proc_macros) = load_workspace_at(
+            cargo_toml.as_ref(),
+            &CargoConfig {
+                sysroot: Some(ra_ap_project_model::RustLibSource::Discover),
+                ..Default::default()
+            },
+            &load_cfg,
+            &|msg| eprintln!("[ra] {msg}"),
+        )
+        .expect("failed to load Cargo workspace");
+
+        let sentinel_vfs = VfsPath::from(AbsPathBuf::assert(
+            sentinel
+                .absolute()
+                .unwrap()
+                .try_into()
+                .expect("path is not valid UTF-8"),
+        ));
+
+        let (snippet_file_id, _) = vfs.file_id(&sentinel_vfs).expect("sentinel must be in VFS");
+
+        Self {
+            host: AnalysisHost::with_database(db),
+            snippet_file_id,
+        }
+    }
+}
+```
+
+
+```rust
+#![feature(path_absolute_method)]
+use mdbook::book::{Book, BookItem};
+use mdbook::errors::Error;
+use mdbook::preprocess::{CmdPreprocessor, Preprocessor, PreprocessorContext};
+use ra_ap_ide::{
+    AdjustmentHints, Analysis, AnalysisHost, GenericParameterHints, Highlight, HighlightConfig,
+    HlRange, HlTag, InlayFieldsToResolve, InlayHint, InlayHintPosition, InlayHintsConfig,
+    InlayKind, SymbolKind, TextRange,
+};
+use ra_ap_ide_db::{ChangeWithProcMacros, MiniCore};
+use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
+use ra_ap_project_model::CargoConfig;
+use ra_ap_vfs::{AbsPathBuf, Change, FileId, Vfs, VfsPath};
+use regex::Regex;
+use std::io;
+use std::path::Path;
+mod _snippet;
+
+static HIGHLIGHT_CONFIG: HighlightConfig = HighlightConfig {
+    strings: true,
+    punctuation: true,
+    specialize_punctuation: true,
+    operator: true,
+    specialize_operator: true,
+    inject_doc_comment: true,
+    macro_bang: true,
+    syntactic_name_ref_highlighting: true,
+    comments: true,
+    // When using a real workspace the sysroot is loaded and minicore
+    // is not needed.  It's harmless to leave at default in both modes.
+    minicore: MiniCore::default(),
+};
+
+static INLAY_HINT_CONFIG: InlayHintsConfig = InlayHintsConfig {
+    adjustment_hints: AdjustmentHints::Never,
+    adjustment_hints_disable_reborrows: true,
+    adjustment_hints_hide_outside_unsafe: false,
+    adjustment_hints_mode: ra_ap_ide::AdjustmentHintsMode::Prefix,
+    binding_mode_hints: false,
+    chaining_hints: false,
+    closing_brace_hints_min_lines: Some(25),
+    closure_capture_hints: false,
+    closure_return_type_hints: ra_ap_ide::ClosureReturnTypeHints::Always, // was WithBlock, default is "never"
+    closure_style: ra_ap_hir_ty::display::ClosureStyle::ImplFn,
+    discriminant_hints: ra_ap_ide::DiscriminantHints::Always,
+    fields_to_resolve: InlayFieldsToResolve {
+        resolve_hint_tooltip: true,
+        resolve_label_command: true,
+        resolve_label_location: true,
+        resolve_label_tooltip: true,
+        resolve_text_edits: true,
+    },
+    generic_parameter_hints: GenericParameterHints {
+        type_hints: false,
+        lifetime_hints: false,
+        const_hints: true,
+    },
+    hide_closure_initialization_hints: true,
+    hide_closure_parameter_hints: true,
+    hide_inferred_type_hints: true,
+    hide_named_constructor_hints: true,
+    implicit_drop_hints: false,
+    implied_dyn_trait_hints: true,
+    lifetime_elision_hints: ra_ap_ide::LifetimeElisionHints::Never,
+    max_length: Some(25),
+    minicore: MiniCore::default(),
+    param_names_for_lifetime_elision_hints: false,
+    parameter_hints: true,
+    parameter_hints_for_missing_arguments: true,
+    range_exclusive_hints: true,
+    render_colons: true,
+    sized_bound: true,
+    type_hints: true,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let preprocessor = RaHighlight;
@@ -28,20 +187,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// ── Preprocessor ─────────────────────────────────────────────────────────────
 
 struct RaHighlight;
 
 impl Preprocessor for RaHighlight {
     fn name(&self) -> &str {
-        "ra-highlight"
+        "mdbook-rust-analyzer-highlight"
     }
 
-    fn run(&self, _ctx: &PreprocessorContext, mut book: Book) -> Result<Book, Error> {
+    fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book, Error> {
+        let project_root = ctx
+            .config
+            .get_preprocessor(self.name())
+            .and_then(|t| t.get("project-root"))
+            .and_then(|v| v.as_str())
+            .unwrap();
+
+        let mut highlighter: Box<WorkspaceHighlighter> =
+            Box::new(WorkspaceHighlighter::load(project_root));
+
         book.for_each_mut(|item| {
             if let BookItem::Chapter(ch) = item {
-                ch.content = process_markdown(&ch.content);
+                ch.content = highlighter.as_mut().process_markdown(&ch.content);
             }
         });
+
         Ok(book)
     }
 
@@ -50,71 +221,173 @@ impl Preprocessor for RaHighlight {
     }
 }
 
+pub struct WorkspaceHighlighter {
+    host: AnalysisHost,
+    snippet_file_id: FileId,
+}
 
-fn process_markdown(content: &str) -> String {
-    let re = Regex::new(r"(?ms)^```rust[^\n]*\n(.*?)^```[ \t]*$").unwrap();
-    re.replace_all(content, |caps: &regex::Captures| {
-        format!(
-            "<pre><code class=\"language-hlrs\">{}</code></pre>",
-            highlight_to_html(&caps[1])
+impl WorkspaceHighlighter {
+    /// Load the Cargo workspace at `project_root`
+    pub fn load(project_root: &str) -> Self {
+        let root = Path::new(project_root);
+        let sentinel = Path::new(project_root).join("src/_snippet.rs");
+        std::fs::write(&sentinel, "// placeholder").unwrap();
+        let cargo_toml = root.join("Cargo.toml");
+
+        let load_cfg = LoadCargoConfig {
+            load_out_dirs_from_check: true,
+            with_proc_macro_server: ProcMacroServerChoice::Sysroot,
+            prefill_caches: false,
+            num_worker_threads: 4,
+            proc_macro_processes: 4,
+        };
+
+        let (db, vfs, _proc_macros) = load_workspace_at(
+            cargo_toml.as_ref(),
+            &CargoConfig {
+                sysroot: Some(ra_ap_project_model::RustLibSource::Discover),
+                ..Default::default()
+            },
+            &load_cfg,
+            &|msg| eprintln!("[ra] {msg}"),
         )
-    })
-    .into_owned()
+        .expect("failed to load Cargo workspace");
+
+        let sentinel_vfs = VfsPath::from(AbsPathBuf::assert(
+            sentinel
+                .absolute()
+                .unwrap()
+                .try_into()
+                .expect("path is not valid UTF-8"),
+        ));
+
+        let (snippet_file_id, _) = vfs.file_id(&sentinel_vfs).expect("sentinel must be in VFS");
+
+        Self {
+            host: AnalysisHost::with_database(db),
+            snippet_file_id,
+        }
+    }
 }
 
+impl WorkspaceHighlighter {
+    fn highlight_snippet(&mut self, code: &str) -> String {
+        let mut change = ChangeWithProcMacros::default();
+        change.change_file(self.snippet_file_id, Some(code.to_string()));
+        self.host.apply_change(change);
 
-fn highlight_to_html(code: &str) -> String {
-    let (analysis, file_id) = Analysis::from_single_file(code.to_string());
+        let analysis = self.host.analysis();
+        let highlights = analysis
+            .highlight(HIGHLIGHT_CONFIG, self.snippet_file_id)
+            .unwrap_or_default();
 
-    let config = HighlightConfig {
-        strings: true,
-        punctuation: true,
-        specialize_punctuation: true,
-        operator: true,
-        specialize_operator: true,
-        inject_doc_comment: true,
-        macro_bang: true,
-        syntactic_name_ref_highlighting: true,
-        comments: true,
-        minicore: Default::default(),
-    };
+        let inlay_hints = analysis
+            .inlay_hints(&INLAY_HINT_CONFIG, self.snippet_file_id, None)
+            .unwrap_or_default();
 
-    let highlights = analysis.highlight(config, file_id).unwrap_or_default();
+        ranges_to_html(code, &highlights, &inlay_hints)
+    }
 
-    ranges_to_html(code, &highlights)
+    fn process_markdown(&mut self, content: &str) -> String {
+        let re = Regex::new(r"(?ms)^```rust[^\n]*\n(.*?)^```[ \t]*$").unwrap();
+        re.replace_all(content, |caps: &regex::Captures| {
+            format!(
+                "<pre><code class=\"language-hlrs\">{}</code></pre>",
+                self.highlight_snippet(&caps[1])
+            )
+        })
+        .to_string()
+    }
 }
 
+#[derive(Debug)]
+pub enum TextAddon<'a> {
+    Highlight(&'a HlRange),
+    InlayHint(&'a InlayHint),
+}
 
-fn ranges_to_html(code: &str, highlights: &[HlRange]) -> String {
+impl<'a> TextAddon<'a> {
+    fn range(&self) -> TextRange {
+        match self {
+            TextAddon::Highlight(h) => h.range,
+            TextAddon::InlayHint(h) => h.range,
+        }
+    }
+}
+
+fn ranges_to_html(code: &str, highlights: &[HlRange], inlay_hints: &Vec<InlayHint>) -> String {
     let mut out = String::with_capacity(code.len() * 2);
     let mut cursor = 0usize;
 
-    for hl in highlights {
-        let start = usize::from(hl.range.start());
-        let end = usize::from(hl.range.end());
+    let mut addons: Vec<TextAddon> = Vec::new();
 
+    for h in highlights {
+        addons.push(TextAddon::Highlight(h));
+    }
+
+    for i in inlay_hints {
+        addons.push(TextAddon::InlayHint(i));
+    }
+
+    addons.sort_by(|a, b| {
+        a.range().ordering(b.range()).then_with(|| match (a, b) {
+            // Before-positioned inlay hints sort first
+            (TextAddon::InlayHint(i), _) if let InlayHintPosition::Before = i.position => {
+                std::cmp::Ordering::Less
+            }
+            (_, TextAddon::InlayHint(i)) if let InlayHintPosition::Before = i.position => {
+                std::cmp::Ordering::Greater
+            }
+
+            // After-positioned inlay hints sort last
+            (TextAddon::InlayHint(i), _) if let InlayHintPosition::After = i.position => {
+                std::cmp::Ordering::Greater
+            }
+            (_, TextAddon::InlayHint(i)) if let InlayHintPosition::After = i.position => {
+                std::cmp::Ordering::Less
+            }
+
+            _ => std::cmp::Ordering::Equal,
+        })
+    });
+
+    for a in addons {
+        eprintln!("{:#?}", a);
+
+        let start = usize::from(a.range().start());
+        let end = usize::from(a.range().end());
         if cursor < start {
             out.push_str(&html_escape(&code[cursor..start]));
         }
+        match a {
+            TextAddon::Highlight(hl) => {
+                let class = hl_to_class(hl.highlight);
+                let text = html_escape(&code[start..end]);
+                if class.is_empty() {
+                    out.push_str(&text);
+                } else {
+                    let mods: String = hl
+                        .highlight
+                        .mods
+                        .iter()
+                        .map(|m| format!(" ra-mod-{m}"))
+                        .collect();
+                    out.push_str(&format!("<span class=\"{class}{mods}\">{text}</span>"));
+                }
+                cursor = end; // advance past the code
+            }
+            TextAddon::InlayHint(i) => {
+                let mut label = i.label.to_string();
+                if let InlayKind::Parameter = i.kind {
+                    label.push(' ');
+                }
 
-        let class = hl_to_class(hl.highlight);
-        let text = html_escape(&code[start..end]);
-
-        if class.is_empty() {
-            out.push_str(&text);
-        } else {
-            let mods: String = hl
-                .highlight
-                .mods
-                .iter()
-                .map(|m| format!(" ra-mod-{m}"))
-                .collect();
-            out.push_str(&format!("<span class=\"{class}{mods}\">{text}</span>"));
+                out.push_str(&format!("<span class=\"inlay-hint\">{label}</span>"));
+            }
         }
-
-        cursor = end;
     }
 
+    // Emit any trailing text after the last highlight range.
     if cursor < code.len() {
         out.push_str(&html_escape(&code[cursor..]));
     }
@@ -122,27 +395,28 @@ fn ranges_to_html(code: &str, highlights: &[HlRange]) -> String {
     out
 }
 
-
 fn hl_to_class(hl: Highlight) -> &'static str {
     match hl.tag {
         HlTag::Keyword => "hlrs-keyword",
         HlTag::BoolLiteral | HlTag::NumericLiteral => "hlrs-litnum",
         HlTag::StringLiteral | HlTag::ByteLiteral | HlTag::CharLiteral => "hlrs-litstr",
         HlTag::Comment => "hlrs-comment",
-        HlTag::EscapeSequence => "hlrs-attribute", // Matches neutral gray-white
-        HlTag::FormatSpecifier => "hlrs-macro",    // Matches orange/tan
+        HlTag::EscapeSequence => "hlrs-attribute",
+        HlTag::FormatSpecifier => "hlrs-macro",
         HlTag::BuiltinType => "hlrs-type",
-        HlTag::UnresolvedReference => "hlrs-variable", // Highlighting red marks it as "needs attention"
+        HlTag::UnresolvedReference => "hlrs-variable",
 
         HlTag::Symbol(sym) => match sym {
             SymbolKind::Function | SymbolKind::Method => "hlrs-function",
+
             SymbolKind::Struct
             | SymbolKind::Trait
             | SymbolKind::TypeAlias
             | SymbolKind::TypeParam
-            | SymbolKind::Module => "hlrs-type",
+            | SymbolKind::Module
+            | SymbolKind::Enum => "hlrs-type",
 
-            SymbolKind::Enum | SymbolKind::Variant => "hlrs-enum",
+            SymbolKind::Variant => "hlrs-enum",
 
             SymbolKind::Macro => "hlrs-macro",
 
@@ -155,21 +429,21 @@ fn hl_to_class(hl: Highlight) -> &'static str {
 
             SymbolKind::LifetimeParam => "hlrs-lifetime",
 
-            // Corrected to match .hlrs-selftoken
             SymbolKind::SelfParam | SymbolKind::SelfType => "hlrs-selftoken",
 
-            // Corrected to match .hlrs-attribute
             SymbolKind::Attribute | SymbolKind::BuiltinAttr | SymbolKind::Derive => {
                 "hlrs-attribute"
             }
+            SymbolKind::CrateRoot => "hlrs-type",
 
-            _ => "",
+            _ => hl.tag.to_string().leak(),
         },
-        Test::A => ""
 
-        _ => "",
+        _ => hl.tag.to_string().leak(),
     }
 }
+
+// ── HTML escaping ─────────────────────────────────────────────────────────────
 
 fn html_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -183,71 +457,6 @@ fn html_escape(s: &str) -> String {
         }
     }
     out
-}
-
-pub enum Test {
-    A,
-    B
-}
-
-```
-ANOTHER SNIPPET 
-
-
-```rust
-fn highlight_to_html(code: &str) -> String {
-    let (analysis, file_id) = Analysis::from_single_file(code.to_string());
-
-    let config = HighlightConfig {
-        strings: true,
-        punctuation: true,
-        specialize_punctuation: true,
-        operator: true,
-        specialize_operator: true,
-        inject_doc_comment: true,
-        macro_bang: true,
-        syntactic_name_ref_highlighting: true,
-        comments: true,
-        minicore: Default::default(),
-    };
-
-    let highlights = analysis.highlight(config, file_id).unwrap_or_default();
-
-    ranges_to_html(code, &highlights)
-}
-
-```
-
-```rust
-static GLOBAL_DESCRIPTOR_TABLE_LONG_MODE: GlobalDescriptorTableLong =
-    GlobalDescriptorTableLong::default();
-
-use std::arch::asm;
-
-#[unsafe(no_mangle)]
-#[unsafe(link_section = ".start")]
-#[allow(unsafe_op_in_unsafe_fn)]
-#[allow(clippy::missing_safety_doc)]
-pub unsafe extern "C" fn second_stage() -> ! {
-    // Set data segment register
-    asm!("mov eax, 0x10", "mov ds, eax",);
-    // Enable paging and load page tables with an identity
-    // mapping
-    #[cfg(target_arch = "x86")]
-    cpu_utils::structures::paging::enable();
-    // Load the global descriptor table for long mode
-    GLOBAL_DESCRIPTOR_TABLE_LONG_MODE.load();
-    // Update global descriptor table to enable long mode
-    // and jump to kernel code
-    asm!(
-        "ljmp ${section}, ${next_stage}",
-        section = const Sections::KernelCode as u8,
-        next_stage = const KERNEL_OFFSET,
-        options(att_syntax)
-    );
-
-    #[allow(clippy::all)]
-    loop {}
 }
 
 ```

@@ -2,14 +2,16 @@
 use mdbook::book::{Book, BookItem};
 use mdbook::errors::Error;
 use mdbook::preprocess::{CmdPreprocessor, Preprocessor, PreprocessorContext};
-use ra_ap_ide::{Analysis, AnalysisHost, Highlight, HighlightConfig, HlRange, HlTag, SymbolKind};
+use ra_ap_ide::{
+    AdjustmentHints, Analysis, AnalysisHost, GenericParameterHints, Highlight, HighlightConfig,
+    HlRange, HlTag, InlayFieldsToResolve, InlayHint, InlayHintPosition, InlayHintsConfig,
+    InlayKind, SymbolKind, TextRange,
+};
 use ra_ap_ide_db::{ChangeWithProcMacros, MiniCore};
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::CargoConfig;
 use ra_ap_vfs::{AbsPathBuf, Change, FileId, Vfs, VfsPath};
 use regex::Regex;
-use std::arch::asm;
-use std::fmt::Debug;
 use std::io;
 use std::path::Path;
 mod _snippet;
@@ -27,6 +29,48 @@ static HIGHLIGHT_CONFIG: HighlightConfig = HighlightConfig {
     // When using a real workspace the sysroot is loaded and minicore
     // is not needed.  It's harmless to leave at default in both modes.
     minicore: MiniCore::default(),
+};
+
+static INLAY_HINT_CONFIG: InlayHintsConfig = InlayHintsConfig {
+    adjustment_hints: AdjustmentHints::Never,
+    adjustment_hints_disable_reborrows: true,
+    adjustment_hints_hide_outside_unsafe: false,
+    adjustment_hints_mode: ra_ap_ide::AdjustmentHintsMode::Prefix,
+    binding_mode_hints: false,
+    chaining_hints: false,
+    closing_brace_hints_min_lines: Some(25),
+    closure_capture_hints: false,
+    closure_return_type_hints: ra_ap_ide::ClosureReturnTypeHints::Always, // was WithBlock, default is "never"
+    closure_style: ra_ap_hir_ty::display::ClosureStyle::ImplFn,
+    discriminant_hints: ra_ap_ide::DiscriminantHints::Always,
+    fields_to_resolve: InlayFieldsToResolve {
+        resolve_hint_tooltip: true,
+        resolve_label_command: true,
+        resolve_label_location: true,
+        resolve_label_tooltip: true,
+        resolve_text_edits: true,
+    },
+    generic_parameter_hints: GenericParameterHints {
+        type_hints: false,
+        lifetime_hints: false,
+        const_hints: true,
+    },
+    hide_closure_initialization_hints: false,
+    hide_closure_parameter_hints: false,
+    hide_inferred_type_hints: false,
+    hide_named_constructor_hints: false,
+    implicit_drop_hints: false,
+    implied_dyn_trait_hints: true,
+    lifetime_elision_hints: ra_ap_ide::LifetimeElisionHints::Never,
+    max_length: Some(25),
+    minicore: MiniCore::default(),
+    param_names_for_lifetime_elision_hints: false,
+    parameter_hints: true,
+    parameter_hints_for_missing_arguments: true,
+    range_exclusive_hints: true,
+    render_colons: true,
+    sized_bound: true,
+    type_hints: true,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -60,31 +104,19 @@ impl Preprocessor for RaHighlight {
     }
 
     fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book, Error> {
-        // Read project-root from book.toml:
-        //   [preprocessor.ra-highlight]
-        //   project-root = "/absolute/path/to/your/crate"
         let project_root = ctx
             .config
             .get_preprocessor(self.name())
             .and_then(|t| t.get("project-root"))
-            .and_then(|v| v.as_str());
+            .and_then(|v| v.as_str())
+            .unwrap();
 
-        // If project-root is configured, load the full workspace once.
-        // Otherwise fall back to single-file mode (no macro expansion).
-        let mut highlighter: Box<dyn Highlighter> = match project_root {
-            Some(root) => {
-                eprintln!("[ra-highlight] Loading workspace at {root} …");
-                Box::new(WorkspaceHighlighter::load(root))
-            }
-            None => {
-                eprintln!("[ra-highlight] No project-root set, using single-file mode");
-                Box::new(SingleFileHighlighter)
-            }
-        };
+        let mut highlighter: Box<WorkspaceHighlighter> =
+            Box::new(WorkspaceHighlighter::load(project_root));
 
         book.for_each_mut(|item| {
             if let BookItem::Chapter(ch) = item {
-                ch.content = process_markdown(&ch.content, highlighter.as_mut());
+                ch.content = highlighter.as_mut().process_markdown(&ch.content);
             }
         });
 
@@ -96,41 +128,9 @@ impl Preprocessor for RaHighlight {
     }
 }
 
-// ── Highlighter trait — lets us swap single-file vs workspace ─────────────────
-
-trait Highlighter {
-    fn highlight_snippet(&mut self, code: &str) -> String;
-}
-
-// ── Single-file fallback (original behaviour) ─────────────────────────────────
-
-struct SingleFileHighlighter;
-
-impl Highlighter for SingleFileHighlighter {
-    fn highlight_snippet(&mut self, code: &str) -> String {
-        let helper_str = std::fs::read_to_string("helper.rs").unwrap_or_else(|e| {
-            eprintln!("[ra-highlight] No helper file: {e}");
-            String::new()
-        });
-
-        let mut extended_code = code.to_string();
-        extended_code.push_str(&helper_str);
-
-        let (analysis, file_id) = Analysis::from_single_file(extended_code);
-        let highlights = analysis
-            .highlight(HIGHLIGHT_CONFIG, file_id)
-            .unwrap_or_default();
-
-        ranges_to_html(code, &highlights)
-    }
-}
-
-// ── Full workspace highlighter ────────────────────────────────────────────────
-
 pub struct WorkspaceHighlighter {
     host: AnalysisHost,
-    vfs: Vfs,
-    snippet_file_id: FileId, // FileId of the sentinel file
+    snippet_file_id: FileId,
 }
 
 impl WorkspaceHighlighter {
@@ -142,8 +142,6 @@ impl WorkspaceHighlighter {
         let cargo_toml = root.join("Cargo.toml");
 
         let load_cfg = LoadCargoConfig {
-            // Runs `cargo check` so build-script out-dirs are known.
-            // Set to false to skip build scripts and speed up loading.
             load_out_dirs_from_check: true,
             with_proc_macro_server: ProcMacroServerChoice::Sysroot,
             prefill_caches: false,
@@ -170,25 +168,16 @@ impl WorkspaceHighlighter {
                 .expect("path is not valid UTF-8"),
         ));
 
-        // for f in vfs.iter() {
-        //     eprintln!("{:?}", f);
-        // }
-
-        eprintln!("SENTINAL PATH: {}", sentinel_vfs);
-
         let (snippet_file_id, _) = vfs.file_id(&sentinel_vfs).expect("sentinel must be in VFS");
-
-        eprintln!("FILE ID: {:?}", snippet_file_id);
 
         Self {
             host: AnalysisHost::with_database(db),
-            vfs,
             snippet_file_id,
         }
     }
 }
 
-impl Highlighter for WorkspaceHighlighter {
+impl WorkspaceHighlighter {
     fn highlight_snippet(&mut self, code: &str) -> String {
         let mut change = ChangeWithProcMacros::default();
         change.change_file(self.snippet_file_id, Some(code.to_string()));
@@ -199,57 +188,107 @@ impl Highlighter for WorkspaceHighlighter {
             .highlight(HIGHLIGHT_CONFIG, self.snippet_file_id)
             .unwrap_or_default();
 
-        ranges_to_html(code, &highlights)
+        let inlay_hints = analysis
+            .inlay_hints(&INLAY_HINT_CONFIG, self.snippet_file_id, None)
+            .unwrap_or_default();
+
+        ranges_to_html(code, &highlights, &inlay_hints)
+    }
+
+    fn process_markdown(&mut self, content: &str) -> String {
+        let re = Regex::new(r"(?ms)^```rust[^\n]*\n(.*?)^```[ \t]*$").unwrap();
+        re.replace_all(content, |caps: &regex::Captures| {
+            format!(
+                "<pre><code class=\"language-hlrs\">{}</code></pre>",
+                self.highlight_snippet(&caps[1])
+            )
+        })
+        .to_string()
     }
 }
 
-fn process_markdown(content: &str, hl: &mut dyn Highlighter) -> String {
-    let re = Regex::new(r"(?ms)^```rust[^\n]*\n(.*?)^```[ \t]*$").unwrap();
-    re.replace_all(content, |caps: &regex::Captures| {
-        format!(
-            "<pre><code class=\"language-hlrs\">{}</code></pre>",
-            hl.highlight_snippet(&caps[1])
-        )
-    })
-    .into_owned()
+#[derive(Debug)]
+pub enum TextAddon<'a> {
+    Highlight(&'a HlRange),
+    InlayHint(&'a InlayHint),
 }
 
-// ── Splice <span> tags at RA's byte ranges ────────────────────────────────────
+impl<'a> TextAddon<'a> {
+    fn range(&self) -> TextRange {
+        match self {
+            TextAddon::Highlight(h) => h.range,
+            TextAddon::InlayHint(h) => h.range,
+        }
+    }
+}
 
-fn ranges_to_html(code: &str, highlights: &[HlRange]) -> String {
+fn ranges_to_html(code: &str, highlights: &[HlRange], inlay_hints: &Vec<InlayHint>) -> String {
     let mut out = String::with_capacity(code.len() * 2);
     let mut cursor = 0usize;
 
-    for hl in highlights {
-        let start = usize::from(hl.range.start());
-        let end = usize::from(hl.range.end());
+    let mut addons: Vec<TextAddon> = Vec::new();
 
-        if start >= code.len() || end > code.len() {
-            continue;
-        }
+    for h in highlights {
+        addons.push(TextAddon::Highlight(h));
+    }
 
-        // Emit any unhighlighted gap before this range.
+    for i in inlay_hints {
+        addons.push(TextAddon::InlayHint(i));
+    }
+
+    addons.sort_by(|a, b| {
+        a.range().ordering(b.range()).then_with(|| match (a, b) {
+            // Before-positioned inlay hints sort first
+            (TextAddon::InlayHint(i), _) if let InlayHintPosition::Before = i.position => {
+                std::cmp::Ordering::Less
+            }
+            (_, TextAddon::InlayHint(i)) if let InlayHintPosition::Before = i.position => {
+                std::cmp::Ordering::Greater
+            }
+
+            // After-positioned inlay hints sort last
+            (TextAddon::InlayHint(i), _) if let InlayHintPosition::After = i.position => {
+                std::cmp::Ordering::Greater
+            }
+            (_, TextAddon::InlayHint(i)) if let InlayHintPosition::After = i.position => {
+                std::cmp::Ordering::Less
+            }
+
+            _ => std::cmp::Ordering::Equal,
+        })
+    });
+
+    for a in addons {
+        eprintln!("{:#?}", a);
+
+        let start = usize::from(a.range().start());
+        let end = usize::from(a.range().end());
         if cursor < start {
             out.push_str(&html_escape(&code[cursor..start]));
         }
-
-        let class = hl_to_class(hl.highlight);
-        let text = html_escape(&code[start..end]);
-
-        if class.is_empty() {
-            out.push_str(&text);
-        } else {
-            // Append modifier classes, e.g. "ra-mod-mutable", "ra-mod-consuming".
-            let mods: String = hl
-                .highlight
-                .mods
-                .iter()
-                .map(|m| format!(" ra-mod-{m}"))
-                .collect();
-            out.push_str(&format!("<span class=\"{class}{mods}\">{text}</span>"));
+        match a {
+            TextAddon::Highlight(hl) => {
+                let class = hl_to_class(hl.highlight);
+                let text = html_escape(&code[start..end]);
+                if class.is_empty() {
+                    out.push_str(&text);
+                } else {
+                    let mods: String = hl
+                        .highlight
+                        .mods
+                        .iter()
+                        .map(|m| format!(" ra-mod-{m}"))
+                        .collect();
+                    out.push_str(&format!("<span class=\"{class}{mods}\">{text}</span>"));
+                }
+                cursor = end; // advance past the code
+            }
+            TextAddon::InlayHint(i) => {
+                let mut label = i.label.to_string();
+                out.push_str(&format!("<span class=\"inlay-hint\">{label}</span>"));
+                cursor = end; // advance past the code
+            }
         }
-
-        cursor = end;
     }
 
     // Emit any trailing text after the last highlight range.
@@ -259,8 +298,6 @@ fn ranges_to_html(code: &str, highlights: &[HlRange]) -> String {
 
     out
 }
-
-// ── RA semantic tag → CSS class ───────────────────────────────────────────────
 
 fn hl_to_class(hl: Highlight) -> &'static str {
     match hl.tag {

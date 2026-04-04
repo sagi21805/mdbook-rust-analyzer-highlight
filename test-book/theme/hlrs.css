@@ -28,6 +28,10 @@
     color: #e06c75;
 }
 
+.inlay-hint {
+    color: #8895a1;
+}
+
 .hlrs-comment {
     color: #5c6370;
     font-style: italic;
