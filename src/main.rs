@@ -12,8 +12,9 @@ use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at
 use ra_ap_project_model::CargoConfig;
 use ra_ap_vfs::{AbsPathBuf, Change, FileId, Vfs, VfsPath};
 use regex::Regex;
-use std::io;
+use std::cmp::Ordering;
 use std::path::Path;
+use std::{io, usize};
 mod _snippet;
 
 static HIGHLIGHT_CONFIG: HighlightConfig = HighlightConfig {
@@ -33,13 +34,13 @@ static HIGHLIGHT_CONFIG: HighlightConfig = HighlightConfig {
 
 static INLAY_HINT_CONFIG: InlayHintsConfig = InlayHintsConfig {
     adjustment_hints: AdjustmentHints::Never,
-    adjustment_hints_disable_reborrows: true,
-    adjustment_hints_hide_outside_unsafe: false,
+    adjustment_hints_disable_reborrows: false,
+    adjustment_hints_hide_outside_unsafe: true,
     adjustment_hints_mode: ra_ap_ide::AdjustmentHintsMode::Prefix,
     binding_mode_hints: false,
-    chaining_hints: false,
+    chaining_hints: true,
     closing_brace_hints_min_lines: Some(25),
-    closure_capture_hints: false,
+    closure_capture_hints: true,
     closure_return_type_hints: ra_ap_ide::ClosureReturnTypeHints::Always, // was WithBlock, default is "never"
     closure_style: ra_ap_hir_ty::display::ClosureStyle::ImplFn,
     discriminant_hints: ra_ap_ide::DiscriminantHints::Always,
@@ -184,15 +185,15 @@ impl WorkspaceHighlighter {
         self.host.apply_change(change);
 
         let analysis = self.host.analysis();
-        let highlights = analysis
+        let mut highlights = analysis
             .highlight(HIGHLIGHT_CONFIG, self.snippet_file_id)
             .unwrap_or_default();
 
-        let inlay_hints = analysis
+        let mut inlay_hints = analysis
             .inlay_hints(&INLAY_HINT_CONFIG, self.snippet_file_id, None)
             .unwrap_or_default();
 
-        ranges_to_html(code, &highlights, &inlay_hints)
+        ranges_to_html(code, &mut highlights, &mut inlay_hints)
     }
 
     fn process_markdown(&mut self, content: &str) -> String {
@@ -222,41 +223,61 @@ impl<'a> TextAddon<'a> {
     }
 }
 
-fn ranges_to_html(code: &str, highlights: &[HlRange], inlay_hints: &Vec<InlayHint>) -> String {
+fn ranges_to_html(
+    code: &str,
+    highlights: &mut [HlRange],
+    inlay_hints: &mut Vec<InlayHint>,
+) -> String {
+    eprintln!("HERE");
     let mut out = String::with_capacity(code.len() * 2);
     let mut cursor = 0usize;
 
-    let mut addons: Vec<TextAddon> = Vec::new();
+    let inlay_start = |i: &InlayHint| match i.position {
+        InlayHintPosition::After => i.range.end(),
+        InlayHintPosition::Before => i.range.start(),
+    };
 
-    for h in highlights {
-        addons.push(TextAddon::Highlight(h));
+    highlights.sort_by(|a, b| a.range.start().cmp(&b.range.start()));
+    inlay_hints.sort_by(|a, b| inlay_start(a).cmp(&inlay_start(b)));
+
+    let mut addons: Vec<TextAddon> = Vec::with_capacity(highlights.len() + inlay_hints.len());
+
+    let mut highlights_iter = highlights.iter().filter(|h| !h.highlight.is_empty());
+    let mut hints_iter = inlay_hints.iter();
+    let mut highlight = highlights_iter.next();
+    let mut hint = hints_iter.next();
+    loop {
+        match (highlight, hint) {
+            (Some(h), Some(i)) => match h.range.start().cmp(&inlay_start(i)) {
+                Ordering::Less => {
+                    addons.push(TextAddon::Highlight(h));
+                    highlight = highlights_iter.next();
+                }
+                Ordering::Greater => {
+                    addons.push(TextAddon::InlayHint(i));
+                    hint = hints_iter.next();
+                }
+                Ordering::Equal => {
+                    addons.push(TextAddon::InlayHint(i));
+                    hint = hints_iter.next();
+                    // }
+                    // InlayHintPosition::After => {
+                    //     addons.push(TextAddon::Highlight(h));
+                    //     highlight = highlights_iter.next()
+                    // }
+                }
+            },
+            (Some(h), None) => {
+                addons.push(TextAddon::Highlight(h));
+                highlight = highlights_iter.next();
+            }
+            (None, Some(i)) => {
+                addons.push(TextAddon::InlayHint(i));
+                hint = hints_iter.next();
+            }
+            (None, None) => break,
+        }
     }
-
-    for i in inlay_hints {
-        addons.push(TextAddon::InlayHint(i));
-    }
-
-    addons.sort_by(|a, b| {
-        a.range().ordering(b.range()).then_with(|| match (a, b) {
-            // Before-positioned inlay hints sort first
-            (TextAddon::InlayHint(i), _) if let InlayHintPosition::Before = i.position => {
-                std::cmp::Ordering::Less
-            }
-            (_, TextAddon::InlayHint(i)) if let InlayHintPosition::Before = i.position => {
-                std::cmp::Ordering::Greater
-            }
-
-            // After-positioned inlay hints sort last
-            (TextAddon::InlayHint(i), _) if let InlayHintPosition::After = i.position => {
-                std::cmp::Ordering::Greater
-            }
-            (_, TextAddon::InlayHint(i)) if let InlayHintPosition::After = i.position => {
-                std::cmp::Ordering::Less
-            }
-
-            _ => std::cmp::Ordering::Equal,
-        })
-    });
 
     for a in addons {
         eprintln!("{:#?}", a);
@@ -286,7 +307,6 @@ fn ranges_to_html(code: &str, highlights: &[HlRange], inlay_hints: &Vec<InlayHin
             TextAddon::InlayHint(i) => {
                 let mut label = i.label.to_string();
                 out.push_str(&format!("<span class=\"inlay-hint\">{label}</span>"));
-                cursor = end; // advance past the code
             }
         }
     }
