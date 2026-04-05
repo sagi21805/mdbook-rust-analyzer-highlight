@@ -3,14 +3,14 @@ use mdbook::book::{Book, BookItem};
 use mdbook::errors::Error;
 use mdbook::preprocess::{CmdPreprocessor, Preprocessor, PreprocessorContext};
 use ra_ap_ide::{
-    AdjustmentHints, Analysis, AnalysisHost, GenericParameterHints, Highlight, HighlightConfig,
-    HlRange, HlTag, InlayFieldsToResolve, InlayHint, InlayHintPosition, InlayHintsConfig,
-    InlayKind, SymbolKind, TextRange,
+    AdjustmentHints, AnalysisHost, GenericParameterHints, Highlight, HighlightConfig, HlRange,
+    HlTag, InlayFieldsToResolve, InlayHint, InlayHintPosition, InlayHintsConfig, InlayKind,
+    SymbolKind, TextRange,
 };
 use ra_ap_ide_db::{ChangeWithProcMacros, MiniCore};
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::CargoConfig;
-use ra_ap_vfs::{AbsPathBuf, Change, FileId, Vfs, VfsPath};
+use ra_ap_vfs::{AbsPathBuf, FileId, VfsPath};
 use regex::Regex;
 use std::cmp::Ordering;
 use std::path::Path;
@@ -33,14 +33,14 @@ static HIGHLIGHT_CONFIG: HighlightConfig = HighlightConfig {
 };
 
 static INLAY_HINT_CONFIG: InlayHintsConfig = InlayHintsConfig {
-    adjustment_hints: AdjustmentHints::Never,
+    adjustment_hints: AdjustmentHints::Always,
     adjustment_hints_disable_reborrows: false,
     adjustment_hints_hide_outside_unsafe: true,
     adjustment_hints_mode: ra_ap_ide::AdjustmentHintsMode::Prefix,
     binding_mode_hints: false,
     chaining_hints: true,
     closing_brace_hints_min_lines: Some(25),
-    closure_capture_hints: true,
+    closure_capture_hints: false,
     closure_return_type_hints: ra_ap_ide::ClosureReturnTypeHints::Always, // was WithBlock, default is "never"
     closure_style: ra_ap_hir_ty::display::ClosureStyle::ImplFn,
     discriminant_hints: ra_ap_ide::DiscriminantHints::Always,
@@ -52,8 +52,8 @@ static INLAY_HINT_CONFIG: InlayHintsConfig = InlayHintsConfig {
         resolve_text_edits: true,
     },
     generic_parameter_hints: GenericParameterHints {
-        type_hints: false,
-        lifetime_hints: false,
+        type_hints: true,
+        lifetime_hints: true,
         const_hints: true,
     },
     hide_closure_initialization_hints: false,
@@ -65,7 +65,7 @@ static INLAY_HINT_CONFIG: InlayHintsConfig = InlayHintsConfig {
     lifetime_elision_hints: ra_ap_ide::LifetimeElisionHints::Never,
     max_length: Some(25),
     minicore: MiniCore::default(),
-    param_names_for_lifetime_elision_hints: false,
+    param_names_for_lifetime_elision_hints: true,
     parameter_hints: true,
     parameter_hints_for_missing_arguments: true,
     range_exclusive_hints: true,
@@ -306,12 +306,17 @@ fn ranges_to_html(
             }
             TextAddon::InlayHint(i) => {
                 let mut label = i.label.to_string();
+                if let InlayKind::Chaining | InlayKind::ClosingBrace = i.kind {
+                    out.push(' ');
+                }
+                if let InlayKind::Parameter = i.kind {
+                    label.push(' ');
+                }
                 out.push_str(&format!("<span class=\"inlay-hint\">{label}</span>"));
             }
         }
     }
 
-    // Emit any trailing text after the last highlight range.
     if cursor < code.len() {
         out.push_str(&html_escape(&code[cursor..]));
     }
