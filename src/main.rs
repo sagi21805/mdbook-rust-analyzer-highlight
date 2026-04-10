@@ -17,6 +17,9 @@ use std::path::Path;
 use std::{io, usize};
 mod _snippet;
 
+const HLRS_CODEBLOCK_REGEX: &str = r"```rust(?:,?([^\n]+))?\n([\s\S]*?)\n?```";
+const RUST_ICON_URL: &str = "@https://www.rust-lang.org/static/images/rust-logo-blk.svg";
+
 static HIGHLIGHT_CONFIG: HighlightConfig = HighlightConfig {
     strings: true,
     punctuation: true,
@@ -95,8 +98,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// ── Preprocessor ─────────────────────────────────────────────────────────────
-
 struct RaHighlight;
 
 impl Preprocessor for RaHighlight {
@@ -115,9 +116,12 @@ impl Preprocessor for RaHighlight {
         let mut highlighter: Box<WorkspaceHighlighter> =
             Box::new(WorkspaceHighlighter::load(project_root));
 
+        todo!("TODO: CHECK NONE");
+        let features = self.whichlang_features(ctx, None);
+
         book.for_each_mut(|item| {
             if let BookItem::Chapter(ch) = item {
-                ch.content = highlighter.as_mut().process_markdown(&ch.content);
+                ch.content = highlighter.as_mut().process_markdown(&ch.content, features);
             }
         });
 
@@ -126,6 +130,33 @@ impl Preprocessor for RaHighlight {
 
     fn supports_renderer(&self, renderer: &str) -> bool {
         renderer == "html"
+    }
+}
+
+impl RaHighlight {
+    fn whichlang_features<'a>(
+        &self,
+        ctx: &PreprocessorContext,
+        f: Option<regex::Match<'a>>,
+    ) -> String {
+        if let Some(cfg) = ctx.config.get(&format!("preprocessor.{}", self.name())) {
+            match cfg.get("whichlang") {
+                Some(feature) => feature
+                    .as_bool()
+                    .expect("\nERROR: `whichlang` configuration should be a boolean"),
+                None => return String::from(""),
+            };
+        }
+
+        let mut feature_string = match f {
+            Some(feature) => feature.as_str().replace(',', " "),
+            None => String::from(""),
+        };
+        if !feature_string.contains("icon=@https://") {
+            feature_string.push_str(" icon=");
+            feature_string.push_str(RUST_ICON_URL);
+        }
+        feature_string
     }
 }
 
@@ -196,7 +227,7 @@ impl WorkspaceHighlighter {
         ranges_to_html(code, &mut highlights, &mut inlay_hints)
     }
 
-    fn process_markdown(&mut self, content: &str) -> String {
+    fn process_markdown(&mut self, content: &str, features: String) -> String {
         let re = Regex::new(r"(?ms)^```rust[^\n]*\n(.*?)^```[ \t]*$").unwrap();
         re.replace_all(content, |caps: &regex::Captures| {
             format!(
