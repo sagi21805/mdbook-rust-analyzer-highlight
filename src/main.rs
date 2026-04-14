@@ -45,7 +45,7 @@ static INLAY_HINT_CONFIG: InlayHintsConfig = InlayHintsConfig {
     closing_brace_hints_min_lines: Some(25),
     closure_capture_hints: false,
     closure_return_type_hints: ra_ap_ide::ClosureReturnTypeHints::Always, // was WithBlock, default is "never"
-    closure_style: ra_ap_hir_ty::display::ClosureStyle::ImplFn,
+    closure_style: ra_ap_hir_ty::display::ClosureStyle::RANotation,
     discriminant_hints: ra_ap_ide::DiscriminantHints::Always,
     fields_to_resolve: InlayFieldsToResolve {
         resolve_hint_tooltip: true,
@@ -116,12 +116,11 @@ impl Preprocessor for RaHighlight {
         let mut highlighter: Box<WorkspaceHighlighter> =
             Box::new(WorkspaceHighlighter::load(project_root));
 
-        todo!("TODO: CHECK NONE");
-        let features = self.whichlang_features(ctx, None);
+        let support = self.whichlang_support(ctx);
 
         book.for_each_mut(|item| {
             if let BookItem::Chapter(ch) = item {
-                ch.content = highlighter.as_mut().process_markdown(&ch.content, features);
+                ch.content = highlighter.as_mut().process_markdown(&ch.content, support);
             }
         });
 
@@ -134,29 +133,16 @@ impl Preprocessor for RaHighlight {
 }
 
 impl RaHighlight {
-    fn whichlang_features<'a>(
-        &self,
-        ctx: &PreprocessorContext,
-        f: Option<regex::Match<'a>>,
-    ) -> String {
+    fn whichlang_support(&self, ctx: &PreprocessorContext) -> bool {
         if let Some(cfg) = ctx.config.get(&format!("preprocessor.{}", self.name())) {
             match cfg.get("whichlang") {
                 Some(feature) => feature
                     .as_bool()
                     .expect("\nERROR: `whichlang` configuration should be a boolean"),
-                None => return String::from(""),
+                None => return false,
             };
         }
-
-        let mut feature_string = match f {
-            Some(feature) => feature.as_str().replace(',', " "),
-            None => String::from(""),
-        };
-        if !feature_string.contains("icon=@https://") {
-            feature_string.push_str(" icon=");
-            feature_string.push_str(RUST_ICON_URL);
-        }
-        feature_string
+        false
     }
 }
 
@@ -227,11 +213,28 @@ impl WorkspaceHighlighter {
         ranges_to_html(code, &mut highlights, &mut inlay_hints)
     }
 
-    fn process_markdown(&mut self, content: &str, features: String) -> String {
-        let re = Regex::new(r"(?ms)^```rust[^\n]*\n(.*?)^```[ \t]*$").unwrap();
+    fn extract_whichlang_features<'a>(&self, f: Option<regex::Match<'a>>) -> String {
+        let mut feature_string = match f {
+            Some(feature) => feature.as_str().replace(',', " "),
+            None => String::from(""),
+        };
+        if !feature_string.contains("icon=@https://") {
+            feature_string.push_str(" icon=");
+            feature_string.push_str(RUST_ICON_URL);
+        }
+        feature_string
+    }
+
+    fn process_markdown(&mut self, content: &str, whichlang_support: bool) -> String {
+        let re = Regex::new(HLRS_CODEBLOCK_REGEX).unwrap();
+
         re.replace_all(content, |caps: &regex::Captures| {
+            let mut features = String::from("");
+            if whichlang_support {
+                features.push_str(&self.extract_whichlang_features(caps.get(0)));
+            }
             format!(
-                "<pre><code class=\"language-hlrs\">{}</code></pre>",
+                "<pre><code class=\"language-hlrs\" {features} >{}</code></pre>",
                 self.highlight_snippet(&caps[1])
             )
         })
