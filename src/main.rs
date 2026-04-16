@@ -118,6 +118,9 @@ impl Preprocessor for RaHighlight {
 
         let support = self.whichlang_support(ctx);
 
+        eprintln!("WHICH LANG SUPPORT: {support}");
+        eprintln!("CONFIG: {:#?}", ctx.config);
+
         book.for_each_mut(|item| {
             if let BookItem::Chapter(ch) = item {
                 ch.content = highlighter.as_mut().process_markdown(&ch.content, support);
@@ -134,12 +137,21 @@ impl Preprocessor for RaHighlight {
 
 impl RaHighlight {
     fn whichlang_support(&self, ctx: &PreprocessorContext) -> bool {
+        eprintln!(
+            "CONFIGURATION GOT: {:#?}",
+            ctx.config.get(&format!("preprocessor.{}", self.name()))
+        );
+
         if let Some(cfg) = ctx.config.get(&format!("preprocessor.{}", self.name())) {
-            match cfg.get("whichlang") {
+            eprintln!("PREPROCESSOR CONFIG HERE");
+            return match cfg.get("whichlang") {
                 Some(feature) => feature
                     .as_bool()
                     .expect("\nERROR: `whichlang` configuration should be a boolean"),
-                None => return false,
+                None => {
+                    eprintln!("NO WHICH LANG CONFIG");
+                    false
+                }
             };
         }
         false
@@ -155,7 +167,7 @@ impl WorkspaceHighlighter {
     /// Load the Cargo workspace at `project_root`
     pub fn load(project_root: &str) -> Self {
         let root = Path::new(project_root);
-        let sentinel = Path::new(project_root).join("src/_snippet.rs");
+        let sentinel = Path::new(project_root).join("tests/src/_snippet.rs");
         std::fs::write(&sentinel, "// placeholder").unwrap();
         let cargo_toml = root.join("Cargo.toml");
 
@@ -214,6 +226,7 @@ impl WorkspaceHighlighter {
     }
 
     fn extract_whichlang_features<'a>(&self, f: Option<regex::Match<'a>>) -> String {
+        eprintln!("EXPANDED: {:?}", f);
         let mut feature_string = match f {
             Some(feature) => feature.as_str().replace(',', " "),
             None => String::from(""),
@@ -231,11 +244,15 @@ impl WorkspaceHighlighter {
         re.replace_all(content, |caps: &regex::Captures| {
             let mut features = String::from("");
             if whichlang_support {
-                features.push_str(&self.extract_whichlang_features(caps.get(0)));
+                features.push_str(&self.extract_whichlang_features(caps.get(1)));
             }
+            eprintln!("FEATURES: {features}");
+            eprintln!("CAPS: {:?}", caps);
+            // eprintln!("FEATURES: {features}");
+            // eprintln!("H: {}", self.highlight_snippet(&caps[1]));
             format!(
-                "<pre><code class=\"language-hlrs\" {features} >{}</code></pre>",
-                self.highlight_snippet(&caps[1])
+                "<pre><code class=\"language-hlrs {features}\">{}</code></pre>",
+                self.highlight_snippet(caps.get(2).map(|c| c.as_str()).unwrap_or(""))
             )
         })
         .to_string()
