@@ -2,20 +2,23 @@
 use mdbook::book::{Book, BookItem};
 use mdbook::errors::Error;
 use mdbook::preprocess::{CmdPreprocessor, Preprocessor, PreprocessorContext};
+use mdbook_include_rs::parser::process_directives;
+use proc_macro2::Span;
 use ra_ap_ide::{
     AdjustmentHints, AnalysisHost, GenericParameterHints, Highlight, HighlightConfig, HlRange,
     HlTag, InlayFieldsToResolve, InlayHint, InlayHintPosition, InlayHintsConfig, InlayKind,
     SymbolKind, TextRange,
 };
-use ra_ap_ide_db::{ChangeWithProcMacros, MiniCore};
+use ra_ap_ide_db::MiniCore;
+use ra_ap_ide_db::base_db::SourceDatabase;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_project_model::CargoConfig;
-use ra_ap_vfs::{AbsPathBuf, FileId, VfsPath};
+use ra_ap_vfs::{AbsPathBuf, FileId, Vfs, VfsPath};
 use regex::Regex;
 use std::cmp::Ordering;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::{io, usize};
-mod _snippet;
 
 const HLRS_CODEBLOCK_REGEX: &str = r"```rust(?:,?([^\n]+))?\n([\s\S]*?)\n?```";
 const RUST_ICON_URL: &str = "@https://www.rust-lang.org/static/images/rust-logo-blk.svg";
@@ -123,7 +126,14 @@ impl Preprocessor for RaHighlight {
 
         book.for_each_mut(|item| {
             if let BookItem::Chapter(ch) = item {
-                ch.content = highlighter.as_mut().process_markdown(&ch.content, support);
+                ch.content = highlighter.as_mut().process_markdown(
+                    ch.source_path
+                        .clone()
+                        .unwrap_or("SUMMARY.md".into())
+                        .as_path(),
+                    &ch.content,
+                    support,
+                );
             }
         });
 
@@ -159,16 +169,17 @@ impl RaHighlight {
 }
 
 pub struct WorkspaceHighlighter {
+    root: PathBuf,
     host: AnalysisHost,
-    snippet_file_id: FileId,
+    vfs: Vfs,
+    /// Cache of highlighted snippets
+    hl_cache: HashMap<FileId, String>,
 }
 
 impl WorkspaceHighlighter {
     /// Load the Cargo workspace at `project_root`
     pub fn load(project_root: &str) -> Self {
         let root = Path::new(project_root);
-        let sentinel = Path::new(project_root).join("tests/src/_snippet.rs");
-        std::fs::write(&sentinel, "// placeholder").unwrap();
         let cargo_toml = root.join("Cargo.toml");
 
         let load_cfg = LoadCargoConfig {
@@ -190,43 +201,69 @@ impl WorkspaceHighlighter {
         )
         .expect("failed to load Cargo workspace");
 
-        let sentinel_vfs = VfsPath::from(AbsPathBuf::assert(
-            sentinel
-                .absolute()
-                .unwrap()
-                .try_into()
-                .expect("path is not valid UTF-8"),
-        ));
-
-        let (snippet_file_id, _) = vfs.file_id(&sentinel_vfs).expect("sentinel must be in VFS");
-
         Self {
+            root: root.to_path_buf(),
             host: AnalysisHost::with_database(db),
-            snippet_file_id,
+            vfs,
+            hl_cache: HashMap::new(),
         }
     }
 }
 
 impl WorkspaceHighlighter {
-    fn highlight_snippet(&mut self, code: &str) -> String {
-        let mut change = ChangeWithProcMacros::default();
-        change.change_file(self.snippet_file_id, Some(code.to_string()));
-        self.host.apply_change(change);
+    fn highlight_snippet(&mut self, file_path: PathBuf, span: Option<Span>) -> Option<String> {
+        eprintln!("FILE PATH: {file_path:?}\n SPAN: {span:?}");
 
         let analysis = self.host.analysis();
+        let vfs_path = VfsPath::from(AbsPathBuf::assert(
+            file_path
+                .absolute()
+                .unwrap()
+                .try_into()
+                .expect("Path is not a valid UTF-8"),
+        ));
+
+        let (file_id, _excluded) = self.vfs.file_id(&vfs_path)?;
+
         let mut highlights = analysis
-            .highlight(HIGHLIGHT_CONFIG, self.snippet_file_id)
+            .highlight(HIGHLIGHT_CONFIG, file_id)
             .unwrap_or_default();
 
         let mut inlay_hints = analysis
-            .inlay_hints(&INLAY_HINT_CONFIG, self.snippet_file_id, None)
+            .inlay_hints(&INLAY_HINT_CONFIG, file_id, None)
             .unwrap_or_default();
 
-        ranges_to_html(code, &mut highlights, &mut inlay_hints)
+        let highlighted = match self.hl_cache.get(&file_id) {
+            Some(highlighted) => highlighted,
+            None => {
+                let code = self
+                    .host
+                    .raw_database()
+                    .file_text(file_id)
+                    .text(self.host.raw_database());
+
+                let highlighted = ranges_to_html(code, &mut highlights, &mut inlay_hints);
+                self.hl_cache.insert(file_id, highlighted);
+                // Safe, just instered into this file_id
+                unsafe { self.hl_cache.get(&file_id).unwrap_unchecked() }
+            }
+        };
+
+        let (start_line, end_line) = span
+            .map(|s| (s.start().line, s.end().line))
+            .unwrap_or((2, usize::MAX));
+
+        Some(
+            highlighted
+                .lines()
+                .skip(start_line - 2)
+                .take(end_line - start_line + 2)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
     }
 
     fn extract_whichlang_features<'a>(&self, f: Option<regex::Match<'a>>) -> String {
-        eprintln!("EXPANDED: {:?}", f);
         let mut feature_string = match f {
             Some(feature) => feature.as_str().replace(',', " "),
             None => String::from(""),
@@ -238,7 +275,12 @@ impl WorkspaceHighlighter {
         feature_string
     }
 
-    fn process_markdown(&mut self, content: &str, whichlang_support: bool) -> String {
+    fn process_markdown(
+        &mut self,
+        source_path: &Path,
+        content: &str,
+        whichlang_support: bool,
+    ) -> String {
         let re = Regex::new(HLRS_CODEBLOCK_REGEX).unwrap();
 
         re.replace_all(content, |caps: &regex::Captures| {
@@ -246,14 +288,18 @@ impl WorkspaceHighlighter {
             if whichlang_support {
                 features.push_str(&self.extract_whichlang_features(caps.get(1)));
             }
-            eprintln!("FEATURES: {features}");
-            eprintln!("CAPS: {:?}", caps);
-            // eprintln!("FEATURES: {features}");
-            // eprintln!("H: {}", self.highlight_snippet(&caps[1]));
-            format!(
-                "<pre><code class=\"language-hlrs {features}\">{}</code></pre>",
-                self.highlight_snippet(caps.get(2).map(|c| c.as_str()).unwrap_or(""))
-            )
+
+            let snippet = process_directives(&self.root, source_path, content)
+                .unwrap()
+                .into_iter()
+                .map(|(path, span)| {
+                    self.highlight_snippet(path, span)
+                        .unwrap_or(String::from(""))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            format!("<pre><code class=\"language-hlrs {features}\">{snippet}</code></pre>",)
         })
         .to_string()
     }
@@ -279,7 +325,6 @@ fn ranges_to_html(
     highlights: &mut [HlRange],
     inlay_hints: &mut Vec<InlayHint>,
 ) -> String {
-    eprintln!("HERE");
     let mut out = String::with_capacity(code.len() * 2);
     let mut cursor = 0usize;
 

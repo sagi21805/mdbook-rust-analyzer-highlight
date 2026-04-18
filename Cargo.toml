@@ -7,6 +7,8 @@ edition = "2024"
 mdbook = "0.4.52"
 serde_json = "1"
 regex = "1"
+proc-macro2 = { version = "1",  features = ["span-locations",] }
+syn = { version = "2.0", features = ["full", "visit", "extra-traits"] }
 ra_ap_ide = "0.0.326"
 ra_ap_ide_db = "0.0.326"
 ra_ap_load-cargo = "0.0.326"
@@ -14,3 +16,4 @@ ra_ap_project_model = "0.0.326"
 ra_ap_paths = "0.0.326"
 ra_ap_vfs = "0.0.326"
 ra_ap_hir_ty = "0.0.326"
+mdbook-include-rs = { git = "https://github.com/sagi21805/mdbook-include-rs.git", branch = "main"}
