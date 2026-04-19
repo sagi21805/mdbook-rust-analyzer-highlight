@@ -212,7 +212,9 @@ impl WorkspaceHighlighter {
 
 impl WorkspaceHighlighter {
     fn highlight_snippet(&mut self, file_path: PathBuf, span: Option<Span>) -> Option<String> {
-        eprintln!("FILE PATH: {file_path:?}\n SPAN: {span:?}");
+        let s = span.map(|s| (s.start(), s.end()));
+
+        eprintln!("FILE PATH: {file_path:?}\n SPAN: {s:?}");
 
         let analysis = self.host.analysis();
         let vfs_path = VfsPath::from(AbsPathBuf::assert(
@@ -253,11 +255,24 @@ impl WorkspaceHighlighter {
             .map(|s| (s.start().line, s.end().line))
             .unwrap_or((2, usize::MAX));
 
+        let code = self
+            .host
+            .raw_database()
+            .file_text(file_id)
+            .text(self.host.raw_database());
+
+        let non_highlighted = code.lines().collect::<Vec<_>>().join("\n");
+
+        let hl = highlighted.lines().collect::<Vec<_>>().join("\n");
+
+        // eprintln!("NON HIGHLIGHTED: \n{non_highlighted}");
+        // eprintln!("HIGHLIGHTED: \n{hl}");
+
         Some(
             highlighted
                 .lines()
-                .skip(start_line - 2)
-                .take(end_line - start_line + 2)
+                .skip(start_line - 1) // 4
+                .take(end_line - start_line + 1) // 5
                 .collect::<Vec<_>>()
                 .join("\n"),
         )
@@ -376,8 +391,6 @@ fn ranges_to_html(
     }
 
     for a in addons {
-        eprintln!("{:#?}", a);
-
         let start = usize::from(a.range().start());
         let end = usize::from(a.range().end());
         if cursor < start {
