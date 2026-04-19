@@ -7,6 +7,15 @@
     color: #98c379;
 }
 
+.parenthesis,
+.operator,
+.brace,
+.semicolon,
+.punctuation,
+.angle {
+    color: rgb(200, 200, 200);
+}
+
 .hlrs-selftoken,
 .hlrs-keyword {
     color: #c678dd;
