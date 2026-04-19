@@ -6,7 +6,6 @@ use mdbook::preprocess::{
 };
 use mdbook_include_rs::parser::process_directives;
 use proc_macro2::Span;
-use ra_ap_hir_ty::next_solver::EarlyParamRegion;
 use ra_ap_ide::{
     AdjustmentHints, AnalysisHost, GenericParameterHints,
     Highlight, HighlightConfig, HlRange, HlTag,
@@ -48,9 +47,9 @@ static HIGHLIGHT_CONFIG: HighlightConfig = HighlightConfig {
 };
 
 static INLAY_HINT_CONFIG: InlayHintsConfig = InlayHintsConfig {
-    adjustment_hints: AdjustmentHints::Always,
+    adjustment_hints: AdjustmentHints::Never,
     adjustment_hints_disable_reborrows: true,
-    adjustment_hints_hide_outside_unsafe: true,
+    adjustment_hints_hide_outside_unsafe: false,
     adjustment_hints_mode:
         ra_ap_ide::AdjustmentHintsMode::Prefix,
     binding_mode_hints: false,
@@ -181,8 +180,8 @@ impl RaHighlight {
             eprintln!("PREPROCESSOR CONFIG HERE");
             return match cfg.get("whichlang") {
                 Some(feature) => feature.as_bool().expect(
-                    "\nERROR: `whichlang` configuration should \
-                     be a boolean",
+                    "\nERROR: `whichlang` configuration should be a \
+                     boolean",
                 ),
                 None => {
                     eprintln!("NO WHICH LANG CONFIG");
@@ -259,8 +258,6 @@ impl WorkspaceHighlighter {
         file_path: PathBuf,
         span: Option<Span>,
     ) -> Option<String> {
-        let s = span.map(|s| (s.start(), s.end()));
-
         let analysis = self.host.analysis();
         let vfs_path = VfsPath::from(AbsPathBuf::assert(
             file_path
@@ -307,13 +304,13 @@ impl WorkspaceHighlighter {
 
         let (start_line, end_line) = span
             .map(|s| (s.start().line, s.end().line))
-            .unwrap_or((2, usize::MAX));
+            .unwrap_or((1, usize::MAX));
 
         Some(
             highlighted
                 .lines()
-                .skip(start_line - 1) // 4
-                .take(end_line - start_line + 1) // 5
+                .skip(start_line - 1)
+                .take(end_line - start_line + 1)
                 .collect::<Vec<_>>()
                 .join("\n"),
         )
@@ -345,29 +342,24 @@ impl WorkspaceHighlighter {
         re.replace_all(content, |caps: &regex::Captures| {
             let mut features = String::from("");
             if whichlang_support {
-                features
-                    .push_str(&self.extract_whichlang_features(
-                        caps.get(1),
-                    ));
+                features.push_str(
+                    &self.extract_whichlang_features(caps.get(1)),
+                );
             }
 
-            let snippet = process_directives(
-                &self.root,
-                source_path,
-                content,
-            )
-            .unwrap()
-            .into_iter()
-            .map(|(path, span)| {
-                self.highlight_snippet(path, span)
-                    .unwrap_or(String::from(""))
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+            let snippet =
+                process_directives(&self.root, source_path, content)
+                    .unwrap()
+                    .into_iter()
+                    .map(|(path, span)| {
+                        self.highlight_snippet(path, span)
+                            .unwrap_or(String::from(""))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
 
             format!(
-                "<pre><code class=\"language-hlrs \
-                 {features}\">{snippet}</code></pre>",
+                "<pre><code class=\"language-hlrs {features}\">{snippet}</code></pre>",
             )
         })
         .to_string()
@@ -478,8 +470,7 @@ fn ranges_to_html(
                         .map(|m| format!(" ra-mod-{m}"))
                         .collect();
                     out.push_str(&format!(
-                        "<span class=\"{class}{mods}\">{text}</\
-                         span>"
+                        "<span class=\"{class}{mods}\">{text}</span>"
                     ));
                 }
                 cursor = end; // advance past the code
