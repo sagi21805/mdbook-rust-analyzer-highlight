@@ -29,6 +29,7 @@ const HLRS_CODEBLOCK_REGEX: &str =
     r"```rust(?:,?([^\n]+))?\n([\s\S]*?)\n?```";
 const RUST_ICON_URL: &str =
     "@https://www.rust-lang.org/static/images/rust-logo-blk.svg";
+const DIRECTIVE_REGEX: &str = r"(?ms)^#!\[((?:source_file|function|struct|enum|trait|impl|impl_method|trait_impl|function_body)![\s\S]*?)\]$";
 
 static HIGHLIGHT_CONFIG: HighlightConfig = HighlightConfig {
     strings: true,
@@ -167,24 +168,16 @@ impl RaHighlight {
         &self,
         ctx: &PreprocessorContext,
     ) -> bool {
-        eprintln!(
-            "CONFIGURATION GOT: {:#?}",
-            ctx.config
-                .get(&format!("preprocessor.{}", self.name()))
-        );
-
         if let Some(cfg) = ctx
             .config
             .get(&format!("preprocessor.{}", self.name()))
         {
-            eprintln!("PREPROCESSOR CONFIG HERE");
             return match cfg.get("whichlang") {
                 Some(feature) => feature.as_bool().expect(
                     "\nERROR: `whichlang` configuration should be a \
                      boolean",
                 ),
                 None => {
-                    eprintln!("NO WHICH LANG CONFIG");
                     false
                 }
             };
@@ -199,20 +192,6 @@ pub struct WorkspaceHighlighter {
     vfs: Vfs,
     /// Cache of highlighted snippets
     hl_cache: HashMap<FileId, String>,
-}
-
-fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(ch),
-        }
-    }
-    out
 }
 
 impl WorkspaceHighlighter {
@@ -256,7 +235,7 @@ impl WorkspaceHighlighter {
     fn highlight_snippet(
         &mut self,
         file_path: PathBuf,
-        span: Option<Span>,
+        span: Vec<Span>,
     ) -> Option<String> {
         let analysis = self.host.analysis();
         let vfs_path = VfsPath::from(AbsPathBuf::assert(
@@ -302,18 +281,21 @@ impl WorkspaceHighlighter {
             }
         };
 
-        let (start_line, end_line) = span
-            .map(|s| (s.start().line, s.end().line))
-            .unwrap_or((1, usize::MAX));
+        let mut out = String::new();
 
-        Some(
-            highlighted
-                .lines()
-                .skip(start_line - 1)
-                .take(end_line - start_line + 1)
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )
+        for s in span {
+            out.push_str(
+                &highlighted
+                    .lines()
+                    .skip(s.start().line - 1)
+                    .take(s.end().line - s.start().line + 1)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+            out.push_str("\n\n");
+        }
+
+        Some(out)
     }
 
     fn extract_whichlang_features<'a>(
@@ -338,6 +320,7 @@ impl WorkspaceHighlighter {
         whichlang_support: bool,
     ) -> String {
         let re = Regex::new(HLRS_CODEBLOCK_REGEX).unwrap();
+        let directive_re = Regex::new(DIRECTIVE_REGEX).unwrap();
 
         re.replace_all(content, |caps: &regex::Captures| {
             let mut features = String::from("");
@@ -346,9 +329,14 @@ impl WorkspaceHighlighter {
                     &self.extract_whichlang_features(caps.get(1)),
                 );
             }
-
-            let snippet =
-                process_directives(&self.root, source_path, content)
+            let snippet = directive_re.replace_all(
+                caps.get(2).map_or("", |m| m.as_str()),
+                |dcaps: &regex::Captures| {
+                    process_directives(
+                        &self.root,
+                        source_path,
+                        dcaps.get(0).map_or("", |m| m.as_str()),
+                    )
                     .unwrap()
                     .into_iter()
                     .map(|(path, span)| {
@@ -356,7 +344,8 @@ impl WorkspaceHighlighter {
                             .unwrap_or(String::from(""))
                     })
                     .collect::<Vec<_>>()
-                    .join("\n");
+                    .join("\n")
+            });
 
             format!(
                 "<pre><code class=\"language-hlrs {features}\">{snippet}</code></pre>",
@@ -421,12 +410,6 @@ fn ranges_to_html(
                     Ordering::Equal => {
                         addons.push(TextAddon::InlayHint(i));
                         hint = hints_iter.next();
-                        // }
-                        // InlayHintPosition::After => {
-                        //     addons.
-                        // push(TextAddon::Highlight(h));
-                        //     highlight = highlights_iter.next()
-                        // }
                     }
                 }
             }
@@ -554,4 +537,18 @@ fn hl_to_class(hl: Highlight) -> &'static str {
 
         _ => hl.tag.to_string().leak(),
     }
+}
+
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
