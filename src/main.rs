@@ -25,13 +25,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::{io, usize};
 
+use crate::whichlang::WhichlangFeatures;
+
 mod highlight_conf;
 mod inlay_hint_conf;
+mod whichlang;
 
 const HLRS_CODEBLOCK_REGEX: &str =
     r"```rust(?:,?([^\n]+))?\n([\s\S]*?)\n?```";
-const RUST_ICON_URL: &str =
-    "@https://www.rust-lang.org/static/images/rust-logo-blk.svg";
 const DIRECTIVE_REGEX: &str = r"(?ms)^#!\[((?:source_file|function|struct|enum|trait|impl|impl_method|trait_impl|function_body)![\s\S]*?)\]$";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -243,15 +244,11 @@ impl WorkspaceHighlighter {
         &self,
         f: Option<regex::Match<'a>>,
     ) -> String {
-        let mut feature_string = match f {
-            Some(feature) => feature.as_str().replace(',', " "),
-            None => String::from(""),
-        };
-        if !feature_string.contains("icon=@https://") {
-            feature_string.push_str(" icon=");
-            feature_string.push_str(RUST_ICON_URL);
-        }
-        feature_string
+        let mut features = WhichlangFeatures::from(
+            f.map(|m| m.as_str()).unwrap_or_default(),
+        );
+
+        features.to_string()
     }
 
     fn process_markdown(

@@ -1,5 +1,3 @@
-use std::io;
-
 use ra_ap_hir_ty::display::ClosureStyle;
 use ra_ap_ide::{
     AdjustmentHints, AdjustmentHintsMode,
@@ -336,22 +334,21 @@ impl Default for InlayHintsConfigDe {
     }
 }
 
-fn f() {
-    let f = match std::fs::read_to_string("path") {
-        Ok(s) => s,
-        Err(e) => match e.kind() {
-            std::io::ErrorKind::NotFound => {
-                eprintln!(
-                    "[ INFO ]: File not found, using default configuration"
-                );
-                String::from("")
-            }
-            _ => panic!(),
-        },
-    };
+impl InlayHintsConfigDe {
+    fn from_file(path: &str) -> InlayHintsConfigDe {
+        let f = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    eprintln!(
+                        "[ INFO ]: File not found, using default configuration"
+                    );
+                    String::from("")
+                }
+                _ => panic!("{}", e),
+            },
+        };
 
-    let conf: InlayHintsConfig<'_> =
-        serde_json::from_str::<InlayHintsConfigDe>(&f)
-            .unwrap_or_default()
-            .into();
+        serde_json::from_str(&f).unwrap_or_default()
+    }
 }

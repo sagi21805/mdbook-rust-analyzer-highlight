@@ -48,3 +48,22 @@ impl Default for HighlightConfigDe {
         }
     }
 }
+
+impl HighlightConfigDe {
+    fn from_file(path: &str) -> HighlightConfigDe {
+        let f = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    eprintln!(
+                        "[ INFO ]: File not found, using default configuration"
+                    );
+                    String::from("")
+                }
+                _ => panic!("{}", e),
+            },
+        };
+
+        serde_json::from_str(&f).unwrap_or_default()
+    }
+}
