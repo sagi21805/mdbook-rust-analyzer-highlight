@@ -17,3 +17,4 @@ ra_ap_paths = "0.0.326"
 ra_ap_vfs = "0.0.326"
 ra_ap_hir_ty = "0.0.326"
 mdbook-include-rs = { git = "https://github.com/sagi21805/mdbook-include-rs.git", branch = "main"}
+serde = { version = "1.0.228", features = ["derive"] }

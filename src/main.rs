@@ -25,73 +25,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::{io, usize};
 
+mod highlight_conf;
+mod inlay_hint_conf;
+
 const HLRS_CODEBLOCK_REGEX: &str =
     r"```rust(?:,?([^\n]+))?\n([\s\S]*?)\n?```";
 const RUST_ICON_URL: &str =
     "@https://www.rust-lang.org/static/images/rust-logo-blk.svg";
 const DIRECTIVE_REGEX: &str = r"(?ms)^#!\[((?:source_file|function|struct|enum|trait|impl|impl_method|trait_impl|function_body)![\s\S]*?)\]$";
-
-static HIGHLIGHT_CONFIG: HighlightConfig = HighlightConfig {
-    strings: true,
-    punctuation: true,
-    specialize_punctuation: true,
-    operator: true,
-    specialize_operator: true,
-    inject_doc_comment: true,
-    macro_bang: true,
-    syntactic_name_ref_highlighting: true,
-    comments: true,
-    // When using a real workspace the sysroot is loaded and
-    // minicore is not needed.  It's harmless to leave at
-    // default in both modes.
-    minicore: MiniCore::default(),
-};
-
-static INLAY_HINT_CONFIG: InlayHintsConfig = InlayHintsConfig {
-    adjustment_hints: AdjustmentHints::Never,
-    adjustment_hints_disable_reborrows: true,
-    adjustment_hints_hide_outside_unsafe: false,
-    adjustment_hints_mode:
-        ra_ap_ide::AdjustmentHintsMode::Prefix,
-    binding_mode_hints: false,
-    chaining_hints: true,
-    closing_brace_hints_min_lines: Some(16),
-    closure_capture_hints: false,
-    closure_return_type_hints:
-        ra_ap_ide::ClosureReturnTypeHints::WithBlock,
-    closure_style:
-        ra_ap_hir_ty::display::ClosureStyle::RANotation,
-    discriminant_hints: ra_ap_ide::DiscriminantHints::Fieldless,
-    fields_to_resolve: InlayFieldsToResolve {
-        resolve_hint_tooltip: true,
-        resolve_label_command: true,
-        resolve_label_location: true,
-        resolve_label_tooltip: true,
-        resolve_text_edits: true,
-    },
-    generic_parameter_hints: GenericParameterHints {
-        type_hints: true,
-        lifetime_hints: true,
-        const_hints: true,
-    },
-    hide_closure_initialization_hints: false,
-    hide_closure_parameter_hints: false,
-    hide_inferred_type_hints: false,
-    hide_named_constructor_hints: false,
-    implicit_drop_hints: false,
-    implied_dyn_trait_hints: true,
-    lifetime_elision_hints:
-        ra_ap_ide::LifetimeElisionHints::Never,
-    max_length: Some(256),
-    minicore: MiniCore::default(),
-    param_names_for_lifetime_elision_hints: true,
-    parameter_hints: true,
-    parameter_hints_for_missing_arguments: true,
-    range_exclusive_hints: true,
-    render_colons: true,
-    sized_bound: false,
-    type_hints: true,
-};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let preprocessor = RaHighlight;
