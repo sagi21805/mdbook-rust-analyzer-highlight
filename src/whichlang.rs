@@ -28,7 +28,10 @@ impl ToString for WhichlangFeatures {
         }
         format!(
             "{}{}",
-            self.fp.as_deref().map(|fp| fp).unwrap_or(""),
+            self.fp
+                .as_deref()
+                .map(|fp| format!("fp={}", fp))
+                .unwrap_or(String::from("")),
             self.icon
                 .as_ref()
                 .map(|i| format!(",icon=@{}", i.url()))
