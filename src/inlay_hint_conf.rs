@@ -335,13 +335,17 @@ impl Default for InlayHintsConfigDe {
 }
 
 impl InlayHintsConfigDe {
-    fn from_file(path: &str) -> InlayHintsConfigDe {
+    pub fn from_file(path: &str) -> InlayHintsConfigDe {
+        if path.is_empty() {
+            return InlayHintsConfigDe::default();
+        }
+
         let f = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => match e.kind() {
                 std::io::ErrorKind::NotFound => {
                     eprintln!(
-                        "[ INFO ]: File not found, using default configuration"
+                        "[ INFO ]: File: {path} not found, using default configuration"
                     );
                     String::from("")
                 }
@@ -349,6 +353,9 @@ impl InlayHintsConfigDe {
             },
         };
 
-        serde_json::from_str(&f).unwrap_or_default()
+        serde_json::from_str(&f).unwrap_or_else(|e| {
+            eprintln!("[ INFO ]: Configuration content is invalid\n {e} \nusing default configuration");
+            InlayHintsConfigDe::default()
+        })
     }
 }

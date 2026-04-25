@@ -1,13 +1,12 @@
 #[derive(Default)]
 pub struct WhichlangFeatures {
-    fp: Option<String>,
-    icon: Option<Icon>,
-    banner: Option<()>,
+    pub fp: Option<String>,
+    pub icon: Option<Icon>,
+    pub banner: Option<()>,
 }
 
 pub enum Icon {
     Rust,
-    Asm,
     Other { url: String },
 }
 
@@ -16,9 +15,6 @@ impl Icon {
         match self {
             Icon::Rust => {
                 "https://www.rust-lang.org/static/images/rust-logo-blk.svg"
-            }
-            Icon::Asm => {
-                "https://icons.veryicon.com/png/o/business/vscode-program-item-icon/assembly-7.png"
             }
             Icon::Other { url } => url,
         }
@@ -55,7 +51,10 @@ impl From<&str> for WhichlangFeatures {
                 "fp" => default.fp = Some(value.to_string()),
                 "icon" => {
                     default.icon = Some(Icon::Other {
-                        url: value.to_string(),
+                        url: value
+                            .strip_prefix("@")
+                            .unwrap_or(value)
+                            .to_string(),
                     })
                 }
                 "banner" => default.banner = Some(()),

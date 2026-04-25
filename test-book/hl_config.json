@@ -1,0 +1,11 @@
+{
+  "strings": true,
+  "punctuation": true,
+  "specialize_punctuation": true,
+  "operator": true,
+  "specialize_operator": true,
+  "inject_doc_comment": true,
+  "macro_bang": true,
+  "syntactic_name_ref_highlighting": true,
+  "comments": true
+}

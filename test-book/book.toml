@@ -8,6 +8,8 @@ title = "test-book"
 command = "cargo run --manifest-path ../Cargo.toml --release"
 project-root = "../"
 whichlang = false
+highlight-config = "hl_config.json"
+inlay-hint-config = "inlay_config.json"
 
 [output.html]
 additional-css = ["theme/hlrs.css"]
