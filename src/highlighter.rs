@@ -90,16 +90,20 @@ impl<'a> RustAnalyzerHighlighter<'a> {
 
         let mut out = String::new();
 
-        for s in spans {
-            out.push_str(
-                &highlighted
-                    .lines()
-                    .skip(s.start().line - 1)
-                    .take(s.end().line - s.start().line + 1)
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            );
-            out.push_str("\n");
+        if spans.is_empty() {
+            out.push_str(highlighted);
+        } else {
+            for s in spans {
+                out.push_str(
+                    &highlighted
+                        .lines()
+                        .skip(s.start().line - 1)
+                        .take(s.end().line - s.start().line + 1)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+                out.push_str("\n");
+            }
         }
 
         Some(out)
