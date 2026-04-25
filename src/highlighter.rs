@@ -165,10 +165,11 @@ impl<'a> RustAnalyzerHighlighter<'a> {
                     ));
             }
 
+            let cap_content = caps.get(2).map(|m| m.as_str()).unwrap_or("");
             let snippet = process_directives(
                 &self.config.project_root,
                 source_path,
-                content,
+                cap_content,
             )
             .unwrap()
             .into_iter()

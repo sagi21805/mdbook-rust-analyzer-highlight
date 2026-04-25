@@ -40,14 +40,26 @@ impl ToString for WhichlangFeatures {
 impl From<&str> for WhichlangFeatures {
     fn from(value: &str) -> Self {
         let mut default = Self::default();
+        if value.is_empty() {
+            return default;
+        }
+
         let parts = value.split(',');
 
         for part in parts {
             let mut kv = part.splitn(2, '=');
-            let key = kv.next().expect("msg");
-            let value = kv.next().expect("msg");
 
-            match key {
+            let key = kv.next().unwrap_or_else(|| {
+                panic!("[ ERROR ]: missing key in '{}'", value);
+            });
+            let value = kv.next().unwrap_or_else(|| {
+                panic!(
+                    "[ ERROR ]: missing value in '{}'",
+                    value
+                );
+            });
+
+            match key.trim() {
                 "fp" => default.fp = Some(value.to_string()),
                 "icon" => {
                     default.icon = Some(Icon::Other {
