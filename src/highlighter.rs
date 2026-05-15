@@ -4,8 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use mdbook_include_rs::parser::process_directives;
-use proc_macro2::Span;
+use mdbook_include_rs::parser::{Lines, process_directives};
 use ra_ap_ide::{
     AnalysisHost, Highlight, HlRange, HlTag, InlayHint,
     InlayHintPosition, InlayKind, SymbolKind,
@@ -73,7 +72,7 @@ impl<'a> RustAnalyzerHighlighter<'a> {
     fn get_file_span(
         &mut self,
         file_path: PathBuf,
-        spans: Vec<Span>,
+        spans: Vec<Lines>,
     ) -> Option<String> {
         let vfs_path = VfsPath::from(AbsPathBuf::assert(
             file_path
@@ -97,8 +96,8 @@ impl<'a> RustAnalyzerHighlighter<'a> {
                 out.push_str(
                     &highlighted
                         .lines()
-                        .skip(s.start().line - 1)
-                        .take(s.end().line - s.start().line + 1)
+                        .skip(s.start - 1)
+                        .take(s.end - s.start + 1)
                         .collect::<Vec<_>>()
                         .join("\n"),
                 );
