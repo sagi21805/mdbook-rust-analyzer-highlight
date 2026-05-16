@@ -353,7 +353,6 @@ fn ranges_to_html(
                 if !is_last_boring
                     && code.as_bytes().get(end) == Some(&b'\n')
                 {
-                    eprintln!("HERE");
                     end += 1;
                 }
                 let class = hl_to_class(hl.highlight);
