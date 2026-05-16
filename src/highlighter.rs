@@ -222,23 +222,50 @@ fn ranges_to_html(
         *const HlRange,
     > = std::collections::HashSet::new();
 
+    // True if two ranges start on the same line.
     let is_transparent =
         |h: &HlRange| matches!(h.highlight.tag, HlTag::None);
+
+    // Two ranges share a line if there's no newline in the
+    // source between them.
+    let share_line = |a: &HlRange, b: &HlRange| -> bool {
+        let (start, end) = if a.range.end() <= b.range.start() {
+            // A comes entirely before B
+            (
+                usize::from(a.range.end()),
+                usize::from(b.range.start()),
+            )
+        } else if b.range.end() <= a.range.start() {
+            // B comes entirely before A
+            (
+                usize::from(b.range.end()),
+                usize::from(a.range.start()),
+            )
+        } else {
+            // Ranges overlap — they must be on the same line
+            return true;
+        };
+        !code[start..end].contains('\n')
+    };
 
     let mut last_boring_comments: std::collections::HashSet<
         *const HlRange,
     > = std::collections::HashSet::new();
-
     let mut run_start = 0;
     while run_start < comment_indices.len() {
         let mut run_end = run_start;
         while run_end + 1 < comment_indices.len() {
             let gap_start = comment_indices[run_end] + 1;
             let gap_end = comment_indices[run_end + 1];
-            if highlights[gap_start..gap_end]
-                .iter()
-                .all(is_transparent)
-            {
+            let left_comment =
+                &highlights[comment_indices[run_end]];
+            let right_comment =
+                &highlights[comment_indices[run_end + 1]];
+            if highlights[gap_start..gap_end].iter().all(|h| {
+                is_transparent(h)
+                    || share_line(h, left_comment)
+                    || share_line(h, right_comment)
+            }) {
                 run_end += 1;
             } else {
                 break;
@@ -248,11 +275,19 @@ fn ranges_to_html(
             >= NUMBER_OF_CONSECUTIVE_COMMENTS
         {
             for idx in &comment_indices[run_start..=run_end] {
+                let comment = &highlights[*idx];
                 boring_comments
-                    .insert(&highlights[*idx] as *const HlRange);
+                    .insert(comment as *const HlRange);
+
+                // Also mark anything on the same line as this
+                // comment.
+                for h in highlights.iter() {
+                    if share_line(h, comment) {
+                        boring_comments
+                            .insert(h as *const HlRange);
+                    }
+                }
             }
-            // Track the last comment of every qualifying run,
-            // not just the last one.
             last_boring_comments.insert(
                 &highlights[comment_indices[run_end]]
                     as *const HlRange,
@@ -312,16 +347,14 @@ fn ranges_to_html(
         check = false;
         match a {
             TextAddon::Highlight(hl) => {
-                if let HlTag::Comment = hl.highlight.tag {
-                    let is_last_boring = last_boring_comments
-                        .contains(&(hl as *const HlRange));
+                let is_last_boring = last_boring_comments
+                    .contains(&(hl as *const HlRange));
 
-                    if !is_last_boring
-                        && code.as_bytes().get(end)
-                            == Some(&b'\n')
-                    {
-                        end += 1;
-                    }
+                if !is_last_boring
+                    && code.as_bytes().get(end) == Some(&b'\n')
+                {
+                    eprintln!("HERE");
+                    end += 1;
                 }
                 let class = hl_to_class(hl.highlight);
                 let text = html_escape(&code[start..end]);
