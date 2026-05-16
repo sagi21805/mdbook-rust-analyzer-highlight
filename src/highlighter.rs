@@ -196,21 +196,73 @@ fn ranges_to_html(
     highlights: &mut [HlRange],
     inlay_hints: &mut Vec<InlayHint>,
 ) -> String {
-    let mut out = String::with_capacity(code.len() * 2);
+    const NUMBER_OF_CONSECUTIVE_COMMENTS: usize = 7;
 
+    let mut out = String::with_capacity(code.len() * 2);
     let inlay_start = |i: &InlayHint| match i.position {
         InlayHintPosition::After => i.range.end(),
         InlayHintPosition::Before => i.range.start(),
     };
-
     highlights
         .sort_by(|a, b| a.range.start().cmp(&b.range.start()));
     inlay_hints
         .sort_by(|a, b| inlay_start(a).cmp(&inlay_start(b)));
 
+    let comment_indices: Vec<usize> = highlights
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| {
+            !h.highlight.is_empty()
+                && matches!(h.highlight.tag, HlTag::Comment)
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    let mut boring_comments: std::collections::HashSet<
+        *const HlRange,
+    > = std::collections::HashSet::new();
+
+    let is_transparent =
+        |h: &HlRange| matches!(h.highlight.tag, HlTag::None);
+
+    let mut last_boring_comments: std::collections::HashSet<
+        *const HlRange,
+    > = std::collections::HashSet::new();
+
+    let mut run_start = 0;
+    while run_start < comment_indices.len() {
+        let mut run_end = run_start;
+        while run_end + 1 < comment_indices.len() {
+            let gap_start = comment_indices[run_end] + 1;
+            let gap_end = comment_indices[run_end + 1];
+            if highlights[gap_start..gap_end]
+                .iter()
+                .all(is_transparent)
+            {
+                run_end += 1;
+            } else {
+                break;
+            }
+        }
+        if run_end - run_start + 1
+            >= NUMBER_OF_CONSECUTIVE_COMMENTS
+        {
+            for idx in &comment_indices[run_start..=run_end] {
+                boring_comments
+                    .insert(&highlights[*idx] as *const HlRange);
+            }
+            // Track the last comment of every qualifying run,
+            // not just the last one.
+            last_boring_comments.insert(
+                &highlights[comment_indices[run_end]]
+                    as *const HlRange,
+            );
+        }
+        run_start = run_end + 1;
+    }
+
     let mut addons: Vec<TextAddon> =
         Vec::with_capacity(highlights.len() + inlay_hints.len());
-
     let mut highlights_iter =
         highlights.iter().filter(|h| !h.highlight.is_empty());
     let mut hints_iter = inlay_hints.iter();
@@ -245,23 +297,32 @@ fn ranges_to_html(
             (None, None) => break,
         }
     }
-
     let mut cursor = 0usize;
     let mut check = false;
     for a in addons {
         let start = usize::from(a.range().start());
-        let end = usize::from(a.range().end());
+        let mut end = usize::from(a.range().end());
         if cursor < start {
             let mut text = &code[cursor..start];
             if check {
                 text = text.trim();
             }
-
             out.push_str(&html_escape(text));
         }
         check = false;
         match a {
             TextAddon::Highlight(hl) => {
+                if let HlTag::Comment = hl.highlight.tag {
+                    let is_last_boring = last_boring_comments
+                        .contains(&(hl as *const HlRange));
+
+                    if !is_last_boring
+                        && code.as_bytes().get(end)
+                            == Some(&b'\n')
+                    {
+                        end += 1;
+                    }
+                }
                 let class = hl_to_class(hl.highlight);
                 let text = html_escape(&code[start..end]);
                 if class.is_empty() {
@@ -273,11 +334,20 @@ fn ranges_to_html(
                         .iter()
                         .map(|m| format!(" ra-mod-{m}"))
                         .collect();
+                    // Append "ra-boring" when this comment is
+                    // part of a bulk of 3+.
+                    let boring = if boring_comments
+                        .contains(&(hl as *const HlRange))
+                    {
+                        " boring"
+                    } else {
+                        ""
+                    };
                     out.push_str(&format!(
-                        "<span class=\"{class}{mods}\">{text}</span>"
+                        "<span class=\"{class}{mods}{boring}\">{text}</span>"
                     ));
                 }
-                cursor = end; // advance past the code
+                cursor = end;
             }
             TextAddon::InlayHint(i) => {
                 let mut label = i.label.to_string();
@@ -296,11 +366,9 @@ fn ranges_to_html(
             }
         }
     }
-
     if cursor < code.len() {
         out.push_str(&html_escape(&code[cursor..]));
     }
-
     out
 }
 
