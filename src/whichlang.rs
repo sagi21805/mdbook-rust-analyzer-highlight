@@ -25,7 +25,7 @@ impl Icon {
 impl ToString for WhichlangFeatures {
     fn to_string(&self) -> String {
         format!(
-            "{}{}{}",
+            "{}{}{}{}",
             self.no_banner
                 .as_ref()
                 .map(|_| format!(" banner=no"))
@@ -37,6 +37,10 @@ impl ToString for WhichlangFeatures {
             self.icon
                 .as_ref()
                 .map(|i| format!(" icon=@{}", i.url()))
+                .unwrap_or(String::from("")),
+            self.playground
+                .as_ref()
+                .map(|_| format!(" editable"))
                 .unwrap_or(String::from("")),
         )
     }

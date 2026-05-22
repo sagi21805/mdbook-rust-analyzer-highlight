@@ -5,7 +5,6 @@ use std::{
 };
 
 use mdbook_include_rs::parser::{Lines, process_directives};
-use mdbook_preprocessor::config::Playground;
 use ra_ap_ide::{
     AnalysisHost, Highlight, HlRange, HlTag, InlayHint,
     InlayHintPosition, InlayKind, SymbolKind,
@@ -212,84 +211,6 @@ fn ranges_to_html(
     inlay_hints
         .sort_by(|a, b| inlay_start(a).cmp(&inlay_start(b)));
 
-    let comment_indices: Vec<usize> = highlights
-        .iter()
-        .enumerate()
-        .filter(|(_, h)| {
-            !h.highlight.is_empty()
-                && matches!(h.highlight.tag, HlTag::Comment)
-        })
-        .map(|(i, _)| i)
-        .collect();
-
-    let line_of = |h: &HlRange| -> usize {
-        code[..usize::from(h.range.start())]
-            .bytes()
-            .filter(|&b| b == b'\n')
-            .count()
-    };
-
-    let mut boring_lines: std::collections::HashSet<usize> =
-        std::collections::HashSet::new();
-    let is_transparent =
-        |h: &HlRange| matches!(h.highlight.tag, HlTag::None);
-    let share_line = |a: &HlRange, b: &HlRange| -> bool {
-        let (start, end) = if a.range.end() <= b.range.start() {
-            (
-                usize::from(a.range.end()),
-                usize::from(b.range.start()),
-            )
-        } else if b.range.end() <= a.range.start() {
-            (
-                usize::from(b.range.end()),
-                usize::from(a.range.start()),
-            )
-        } else {
-            return true;
-        };
-        !code[start..end].contains('\n')
-    };
-    let mut last_boring_lines: std::collections::HashSet<usize> =
-        std::collections::HashSet::new();
-    let mut run_start = 0;
-    while run_start < comment_indices.len() {
-        let mut run_end = run_start;
-        while run_end + 1 < comment_indices.len() {
-            let gap_start = comment_indices[run_end] + 1;
-            let gap_end = comment_indices[run_end + 1];
-            let left_comment =
-                &highlights[comment_indices[run_end]];
-            let right_comment =
-                &highlights[comment_indices[run_end + 1]];
-            if highlights[gap_start..gap_end].iter().all(|h| {
-                is_transparent(h)
-                    || share_line(h, left_comment)
-                    || share_line(h, right_comment)
-            }) {
-                run_end += 1;
-            } else {
-                break;
-            }
-        }
-        if run_end - run_start + 1
-            >= NUMBER_OF_CONSECUTIVE_COMMENTS
-        {
-            for idx in &comment_indices[run_start..=run_end] {
-                let comment = &highlights[*idx];
-                boring_lines.insert(line_of(comment));
-                for h in highlights.iter() {
-                    if share_line(h, comment) {
-                        boring_lines.insert(line_of(h));
-                    }
-                }
-            }
-            last_boring_lines.insert(line_of(
-                &highlights[comment_indices[run_end]],
-            ));
-        }
-        run_start = run_end + 1;
-    }
-
     let mut addons: Vec<TextAddon> =
         Vec::with_capacity(highlights.len() + inlay_hints.len());
     let mut highlights_iter =
@@ -389,20 +310,60 @@ fn ranges_to_html(
     if cursor < code.len() {
         out.push_str(&html_escape(&code[cursor..]));
     }
-    out
-    // let mut with_boring = String::with_capacity(out.len());
-    // for (i, line) in out.lines().enumerate() {
-    //     if boring_lines.contains(&(i + 1)) {
-    //         with_boring.push_str(&format!(
-    //             "<span class=\"boring\">{line}\n</span>"
-    //         ));
-    //     } else {
-    //         with_boring.push_str(line);
-    //         with_boring.push('\n');
-    //     }
-    // }
 
-    // with_boring
+    let comment_lines: Vec<usize> = out
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| {
+            l.trim_start()
+                .starts_with("<span class=\"hlrs-comment")
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    let mut groups: Vec<_> = Vec::new();
+
+    let mut start = 0;
+    for (i, num1, num2) in comment_lines
+        .windows(2)
+        .enumerate()
+        .map(|(i, w)| (i, w[0], w[1]))
+    {
+        if num1 + 1 != num2 {
+            let range = comment_lines[start]..=num1;
+            if range.end() + 1 - range.start()
+                > NUMBER_OF_CONSECUTIVE_COMMENTS
+            {
+                groups.push(range);
+            }
+
+            start = i + 1;
+        }
+    }
+    if !comment_lines.is_empty() {
+        let range = comment_lines[start]
+            ..=*comment_lines.last().unwrap();
+        if range.end() + 1 - range.start()
+            > NUMBER_OF_CONSECUTIVE_COMMENTS
+        {
+            groups.push(range)
+        }
+    };
+
+    let output = out
+        .lines()
+        .enumerate()
+        .map(|(i, line)| {
+            if groups.iter().any(|r| r.contains(&i)) {
+                format!("<span class=\"boring\">{line}\n</span>")
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    output
 }
 
 fn hl_to_class(hl: Highlight) -> &'static str {
