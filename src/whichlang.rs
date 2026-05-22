@@ -2,7 +2,8 @@
 pub struct WhichlangFeatures {
     pub fp: Option<String>,
     pub icon: Option<Icon>,
-    pub banner: Option<()>,
+    pub no_banner: Option<()>,
+    pub playground: Option<()>,
 }
 
 pub enum Icon {
@@ -23,19 +24,20 @@ impl Icon {
 
 impl ToString for WhichlangFeatures {
     fn to_string(&self) -> String {
-        if let Some(_) = self.banner {
-            return String::from("banner=no");
-        }
         format!(
-            "{}{}",
+            "{}{}{}",
+            self.no_banner
+                .as_ref()
+                .map(|_| format!(" banner=no"))
+                .unwrap_or(String::from("")),
             self.fp
                 .as_deref()
-                .map(|fp| format!("fp={}", fp))
+                .map(|fp| format!(" fp={}", fp))
                 .unwrap_or(String::from("")),
             self.icon
                 .as_ref()
-                .map(|i| format!(",icon=@{}", i.url()))
-                .unwrap_or(String::from(""))
+                .map(|i| format!(" icon=@{}", i.url()))
+                .unwrap_or(String::from("")),
         )
     }
 }
@@ -55,16 +57,25 @@ impl From<&str> for WhichlangFeatures {
             let key = kv.next().unwrap_or_else(|| {
                 panic!("[ ERROR ]: missing key in '{}'", value);
             });
-            let value = kv.next().unwrap_or_else(|| {
-                panic!(
-                    "[ ERROR ]: missing value in '{}'",
-                    value
-                );
-            });
+            let value = kv.next();
 
             match key.trim() {
-                "fp" => default.fp = Some(value.to_string()),
+                "fp" => {
+                    let value = value.unwrap_or_else(|| {
+                        panic!(
+                            "[ error ]: missing value in '{}'",
+                            key
+                        );
+                    });
+                    default.fp = Some(value.to_string());
+                }
                 "icon" => {
+                    let value = value.unwrap_or_else(|| {
+                        panic!(
+                            "[ error ]: missing value in '{}'",
+                            key
+                        );
+                    });
                     default.icon = Some(Icon::Other {
                         url: value
                             .strip_prefix("@")
@@ -72,7 +83,18 @@ impl From<&str> for WhichlangFeatures {
                             .to_string(),
                     })
                 }
-                "banner" => default.banner = Some(()),
+                "banner" => {
+                    let value = value.unwrap_or_else(|| {
+                        panic!(
+                            "[ error ]: missing value in '{}'",
+                            key
+                        );
+                    });
+                    if value == "no" {
+                        default.no_banner = Some(());
+                    }
+                }
+                "playground" => default.playground = Some(()),
                 _ => {
                     eprintln!(
                         "[ INFO ]: unknown key: {} (ignoreing)",

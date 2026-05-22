@@ -12,4 +12,5 @@ highlight-config = "hl_config.json"
 inlay-hint-config = "inlay_config.json"
 
 [output.html]
-additional-css = ["theme/hlrs.css"]
+additional-css = ["theme/hlrs.css", "theme/highlight.js"]
+smart-punctuation = false

@@ -28,7 +28,7 @@ impl<'a> From<HighlightConfigDe> for HighlightConfig<'a> {
             syntactic_name_ref_highlighting: c
                 .syntactic_name_ref_highlighting,
             comments: c.comments,
-            minicore: Default::default(),
+            ra_fixture: ra_ap_ide::RaFixtureConfig::default(),
         }
     }
 }

@@ -1,10 +1,9 @@
 #![feature(path_absolute_method)]
 use std::io;
 
-use mdbook::book::{Book, BookItem};
-use mdbook::preprocess::{
-    CmdPreprocessor, Preprocessor, PreprocessorContext,
-};
+use mdbook_preprocessor::book::{Book, BookItem};
+use mdbook_preprocessor::{Preprocessor, PreprocessorContext};
+use toml::value::Table;
 
 use crate::config::{Config, ConfigError};
 use crate::highlighter::RustAnalyzerHighlighter;
@@ -27,12 +26,16 @@ impl Preprocessor for HighlighterPreprocessor {
         &self,
         ctx: &PreprocessorContext,
         mut book: Book,
-    ) -> Result<Book, mdbook::errors::Error> {
-        let config = Config::try_from(
-            ctx.config
-                .get_preprocessor(self.name())
-                .ok_or(ConfigError::ConfigNotFound)?,
-        )?;
+    ) -> Result<Book, mdbook_preprocessor::errors::Error> {
+        let conf_raw = ctx
+            .config
+            .get::<Table>(&format!(
+                "preprocessor.{}",
+                self.name()
+            ))?
+            .ok_or(ConfigError::ConfigNotFound)?;
+
+        let config = Config::try_from(&conf_raw)?;
 
         let mut highlighter =
             RustAnalyzerHighlighter::new(&config);
@@ -52,8 +55,11 @@ impl Preprocessor for HighlighterPreprocessor {
         Ok(book)
     }
 
-    fn supports_renderer(&self, renderer: &str) -> bool {
-        renderer == "html"
+    fn supports_renderer(
+        &self,
+        renderer: &str,
+    ) -> Result<bool, mdbook_preprocessor::errors::Error> {
+        Ok(renderer == "html")
     }
 }
 
@@ -64,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("supports") => {
             let renderer = args.next().unwrap_or_default();
             std::process::exit(
-                if preprocessor.supports_renderer(&renderer) {
+                if preprocessor.supports_renderer(&renderer)? {
                     0
                 } else {
                     1
@@ -73,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             let (ctx, book) =
-                CmdPreprocessor::parse_input(io::stdin())?;
+                mdbook_preprocessor::parse_input(io::stdin())?;
             let result = preprocessor.run(&ctx, book)?;
             serde_json::to_writer(io::stdout(), &result)?;
         }

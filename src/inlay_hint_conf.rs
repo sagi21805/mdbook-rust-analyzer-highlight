@@ -3,7 +3,8 @@ use ra_ap_ide::{
     AdjustmentHints, AdjustmentHintsMode,
     ClosureReturnTypeHints, DiscriminantHints,
     GenericParameterHints, InlayFieldsToResolve,
-    InlayHintsConfig, LifetimeElisionHints,
+    InlayHintsConfig, LifetimeElisionHints, RaFixtureConfig,
+    TypeHintsPlacement,
 };
 use serde::Deserialize;
 
@@ -78,7 +79,8 @@ impl<'a> From<InlayHintsConfigDe> for InlayHintsConfig<'a> {
                 .lifetime_elision_hints
                 .into(),
             max_length: c.max_length,
-            minicore: Default::default(),
+            ra_fixture: RaFixtureConfig::default(),
+            type_hints_placement: TypeHintsPlacement::Inline,
             param_names_for_lifetime_elision_hints: c
                 .param_names_for_lifetime_elision_hints,
             parameter_hints: c.parameter_hints,

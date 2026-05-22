@@ -5,6 +5,7 @@ use std::{
 };
 
 use mdbook_include_rs::parser::{Lines, process_directives};
+use mdbook_preprocessor::config::Playground;
 use ra_ap_ide::{
     AnalysisHost, Highlight, HlRange, HlTag, InlayHint,
     InlayHintPosition, InlayKind, SymbolKind,
@@ -126,6 +127,9 @@ impl<'a> RustAnalyzerHighlighter<'a> {
                 .raw_database()
                 .file_text(file_id)
                 .text(self.host.raw_database());
+
+            eprintln!("CODE: \n{}", code);
+
             let highlighted = ranges_to_html(
                 code,
                 &mut highlights,
@@ -140,7 +144,7 @@ impl<'a> RustAnalyzerHighlighter<'a> {
     fn extract_whichlang_features<'b>(
         &self,
         f: Option<regex::Match<'b>>,
-    ) -> String {
+    ) -> WhichlangFeatures {
         let mut features = WhichlangFeatures::from(
             f.map(|m| m.as_str()).unwrap_or_default(),
         );
@@ -149,7 +153,7 @@ impl<'a> RustAnalyzerHighlighter<'a> {
             features.icon = Some(Icon::Rust);
         }
 
-        features.to_string()
+        features
     }
 
     pub fn process_markdown(
@@ -160,12 +164,9 @@ impl<'a> RustAnalyzerHighlighter<'a> {
         let re = Regex::new(HLRS_CODEBLOCK_REGEX).unwrap();
 
         re.replace_all(content, |caps: &regex::Captures| {
-            let mut features = String::from("");
+            let mut features: WhichlangFeatures = WhichlangFeatures::default();
             if self.config.whichlang_support {
-                features
-                    .push_str(&self.extract_whichlang_features(
-                        caps.get(1),
-                    ));
+                features = self.extract_whichlang_features(caps.get(1));
             }
 
             let cap_content = caps.get(2).map(|m| m.as_str()).unwrap_or("");
@@ -183,9 +184,14 @@ impl<'a> RustAnalyzerHighlighter<'a> {
             .collect::<Vec<_>>()
             .join("\n");
 
+            let escaped = snippet.trim_end().replace('\n', "&#10;");
+            let playground = if features.playground.is_some() { "playground" } else { "" };
+            let features = features.to_string();
+
             format!(
-                "<pre><code class=\"language-hlrs {features}\">{snippet}</code></pre>",
+                "\n\n<pre class=\"{playground}\"><code class=\"language-rust {features}\">{escaped}</code></pre>\n\n",
             )
+
         })
         .to_string()
     }
@@ -218,39 +224,35 @@ fn ranges_to_html(
         .map(|(i, _)| i)
         .collect();
 
-    let mut boring_comments: std::collections::HashSet<
-        *const HlRange,
-    > = std::collections::HashSet::new();
+    let line_of = |h: &HlRange| -> usize {
+        code[..usize::from(h.range.start())]
+            .bytes()
+            .filter(|&b| b == b'\n')
+            .count()
+    };
 
-    // True if two ranges start on the same line.
+    let mut boring_lines: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
     let is_transparent =
         |h: &HlRange| matches!(h.highlight.tag, HlTag::None);
-
-    // Two ranges share a line if there's no newline in the
-    // source between them.
     let share_line = |a: &HlRange, b: &HlRange| -> bool {
         let (start, end) = if a.range.end() <= b.range.start() {
-            // A comes entirely before B
             (
                 usize::from(a.range.end()),
                 usize::from(b.range.start()),
             )
         } else if b.range.end() <= a.range.start() {
-            // B comes entirely before A
             (
                 usize::from(b.range.end()),
                 usize::from(a.range.start()),
             )
         } else {
-            // Ranges overlap — they must be on the same line
             return true;
         };
         !code[start..end].contains('\n')
     };
-
-    let mut last_boring_comments: std::collections::HashSet<
-        *const HlRange,
-    > = std::collections::HashSet::new();
+    let mut last_boring_lines: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
     let mut run_start = 0;
     while run_start < comment_indices.len() {
         let mut run_end = run_start;
@@ -276,22 +278,16 @@ fn ranges_to_html(
         {
             for idx in &comment_indices[run_start..=run_end] {
                 let comment = &highlights[*idx];
-                boring_comments
-                    .insert(comment as *const HlRange);
-
-                // Also mark anything on the same line as this
-                // comment.
+                boring_lines.insert(line_of(comment));
                 for h in highlights.iter() {
                     if share_line(h, comment) {
-                        boring_comments
-                            .insert(h as *const HlRange);
+                        boring_lines.insert(line_of(h));
                     }
                 }
             }
-            last_boring_comments.insert(
-                &highlights[comment_indices[run_end]]
-                    as *const HlRange,
-            );
+            last_boring_lines.insert(line_of(
+                &highlights[comment_indices[run_end]],
+            ));
         }
         run_start = run_end + 1;
     }
@@ -336,7 +332,7 @@ fn ranges_to_html(
     let mut check = false;
     for a in addons {
         let start = usize::from(a.range().start());
-        let mut end = usize::from(a.range().end());
+        let end = usize::from(a.range().end());
         if cursor < start {
             let mut text = &code[cursor..start];
             if check {
@@ -347,42 +343,34 @@ fn ranges_to_html(
         check = false;
         match a {
             TextAddon::Highlight(hl) => {
-                let is_last_boring = last_boring_comments
-                    .contains(&(hl as *const HlRange));
-
-                if !is_last_boring
-                    && code.as_bytes().get(end) == Some(&b'\n')
-                {
-                    end += 1;
-                }
                 let class = hl_to_class(hl.highlight);
                 let text = html_escape(&code[start..end]);
                 if class.is_empty() {
                     out.push_str(&text);
                 } else {
-                    let mods: String = hl
-                        .highlight
-                        .mods
-                        .iter()
-                        .map(|m| format!(" ra-mod-{m}"))
-                        .collect();
+                    // let mods: String = hl
+                    //     .highlight
+                    //     .mods
+                    //     .iter()
+                    //     .map(|m| format!(" ra-mod-{m}"))
+                    //     .collect();
+
+                    let mods = "";
+
+                    let trimmed = text.trim_end();
+                    let removed = &text[trimmed.len()..];
                     // Append "ra-boring" when this comment is
                     // part of a bulk of 3+.
-                    let boring = if boring_comments
-                        .contains(&(hl as *const HlRange))
-                    {
-                        " boring"
-                    } else {
-                        ""
-                    };
+
                     out.push_str(&format!(
-                        "<span class=\"{class}{mods}{boring}\">{text}</span>"
+                        "<span class=\"{class}{mods}\">{trimmed}</span>{removed}"
                     ));
                 }
                 cursor = end;
             }
             TextAddon::InlayHint(i) => {
-                let mut label = i.label.to_string();
+                let mut label =
+                    html_escape(&i.label.to_string());
                 if let InlayKind::Chaining
                 | InlayKind::ClosingBrace = i.kind
                 {
@@ -392,8 +380,10 @@ fn ranges_to_html(
                     label.push(' ');
                     check = true;
                 }
+                let trimmed = label.trim_end();
+                let removed = &label[trimmed.len()..];
                 out.push_str(&format!(
-                    "<span class=\"inlay-hint\">{label}</span>"
+                    "<span class=\"inlay-hint\">{trimmed}</span>{removed}"
                 ));
             }
         }
@@ -402,6 +392,19 @@ fn ranges_to_html(
         out.push_str(&html_escape(&code[cursor..]));
     }
     out
+    // let mut with_boring = String::with_capacity(out.len());
+    // for (i, line) in out.lines().enumerate() {
+    //     if boring_lines.contains(&(i + 1)) {
+    //         with_boring.push_str(&format!(
+    //             "<span class=\"boring\">{line}\n</span>"
+    //         ));
+    //     } else {
+    //         with_boring.push_str(line);
+    //         with_boring.push('\n');
+    //     }
+    // }
+
+    // with_boring
 }
 
 fn hl_to_class(hl: Highlight) -> &'static str {
