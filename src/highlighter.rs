@@ -128,8 +128,6 @@ impl<'a> RustAnalyzerHighlighter<'a> {
                 .file_text(file_id)
                 .text(self.host.raw_database());
 
-            eprintln!("CODE: \n{}", code);
-
             let highlighted = ranges_to_html(
                 code,
                 &mut highlights,
