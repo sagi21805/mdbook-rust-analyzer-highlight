@@ -175,8 +175,34 @@ impl<'a> RustAnalyzerHighlighter<'a> {
             .unwrap()
             .into_iter()
             .map(|(path, span)| {
+                if features.fp.is_none() {
+                    let first_main_element = span.iter().max_by_key(|s| s.end - s.start).unwrap_or(&span[0]);
+                    let p = path.display().to_string();
+                    let fp =
+                        // https://doc.rust-lang.org/syn-2.0.117/src/item.rs#22-101.htmyn
+                        if p.contains(".cargo") {
+                            let p = p.split("/registry/src/")
+                                .nth(1)
+                                .and_then(|s| s.splitn(2, "/").nth(1))
+                                .expect(&format!("Couldn't extract registry path {}", p));
+                            let (krate, _) = p.split_once("/").expect("Coudln't extract create");
+                            let (package, version) = krate.split_once("-").expect("Coudln't extract package and version");
+                            let (_, file) = p.split_once("src/").expect("Coudln't extract file");
+                            let p = format!("{}/{}/src/{}/{}.html", package, version, package, file);
+                            format!("<rust-crate>{}#{}-{}", p, first_main_element.start, first_main_element.end)
+                        } else if p.contains(".rustup") {
+                            let p = p.split("/library/").nth(1).expect(&format!("Couldn't extract rustup path {}", p));
+                            let (package, file) = p.split_once("src/").expect("Coudln't extract file");
+                            format!("<rust-doc>src/{}{}.html#{}-{}", package, file, first_main_element.start, first_main_element.end)
+                        } else {
+                            let p = p.strip_prefix(&format!("{}/", self.config.project_root.display())).unwrap_or(&p);
+                            format!("<repo>{}#L{}", p, first_main_element.start)
+                        };
+                    features.fp = Some(fp);
+                }
                 self.get_file_span(path, span)
                     .unwrap_or(String::from(""))
+
             })
             .collect::<Vec<_>>()
             .join("\n");
